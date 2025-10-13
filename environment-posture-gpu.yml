@@ -1,0 +1,15 @@
+name: deepposture-gpu
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pandas
+  - numpy
+  - scikit-learn=1.5.2
+  - pytorch=2.4.1
+  - pytorch-cuda=12.1
+  - pip
+  - pip:
+      - --only-binary :all:

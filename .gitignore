@@ -1,0 +1,48 @@
+# OS/editor cruft
+.DS_Store
+.vscode/
+.idea/
+
+# Python cache/bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dylib
+
+# Virtual/conda environments (if created inside repo)
+.venv/
+venv/
+env/
+.conda/
+conda-env/
+
+# Logs
+logs/
+*.log
+
+# Data: raw, intermediates, predictions, and summaries (regenerate as needed)
+# Comment out individual lines if you intentionally want to commit samples.
+data/
+
+# NHANES downloads and other archives
+*.tar
+*.tar.gz
+*.tar.bz2
+*.bz2
+*.gz
+*.zip
+*.7z
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Posture library large artifacts (do not commit large/binary model files)
+scripts/posture_library/MSSE-2021/pre-trained-models-pt/
+scripts/posture_library/MSSE-2021/tf2PtConversion/
+scripts/posture_library/MSSE-2021/example/
+
+# Misc caches
+*.cache/
+.cache/
