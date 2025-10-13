@@ -29,9 +29,13 @@ conda env create -f environment-swan.yml
 # Posture / DeepPostures environment
 conda env create -f environment-posture.yml
 
+# Optional: Posture (GPU) environment
+conda env create -f environment-posture-gpu.yml
+
 # Quick checks
 conda run -n sklearn023 python scripts/sleep_scripts/sleep_classify.py --help
 conda run -n deepposture python scripts/get_posture_predictions.py --help
+conda run -n deepposture-gpu python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
 Update an existing env after YAML changes:
@@ -142,6 +146,8 @@ SBnovel/
 │  ├─ predictions/<SEQN>/<MODEL>/ # 10‑second posture predictions per day (e.g., CHAP_ALL_ADULTS)
 │  ├─ sleep_predictions/<SEQN>/   # SWaN outputs; per‑day CSVs under predictions/
 │  └─ summaries/                  # Participant and batch‑level hourly summaries
+├─ constants/
+│  └─ participants.csv            # All (cycle, participant_id) pairs consolidated from batches
 ├─ scripts/
 │  ├─ batch_pipeline.py           # Batch runner: download → sleep → posture → summarize → append
 │  ├─ run_participant_pipeline.py # Single participant orchestrator (uses conda run if provided)
@@ -149,9 +155,12 @@ SBnovel/
 │  ├─ prepare_DeepPosture_format.py   # Convert raw hourly .sensor.csv to day‑level ActiGraph CSVs
 │  ├─ get_posture_predictions.py       # Preprocess + run DeepPostures predictions
 │  ├─ summarize_participant.py         # Merge sleep/posture into hourly percent metrics
+│  ├─ make_batches_from_constants.py   # Generate deduped fixed-size batch files from constants
 │  ├─ sleep_scripts/
 │  │  └─ sleep_classify.py        # SWaN sleep/non‑wear classification by day
 │  └─ posture_library/MSSE-2021/  # DeepPostures (CHAP) code & pre‑trained models
+├─ cluster/
+│  └─ run_batch_unity_gpu.slurm   # SLURM array script for Unity GPU partition
 └─ README.md
 ```
 
@@ -162,6 +171,46 @@ SBnovel/
 3) Preprocess to DeepPostures format at `data/preprocessed/<SEQN>/` and run CHAP predictions to `data/predictions/<SEQN>/<MODEL>/`.
 4) Run SWaN sleep/non‑wear per day to `data/sleep_predictions/<SEQN>/predictions/`.
 5) Summarize to hourly metrics per participant to `data/summaries/<SEQN>_sleep_posture_hourly.csv` and optionally append to a batch master CSV.
+
+### Participants list (constants)
+
+We provide `constants/participants.csv` with columns:
+
+- `cycle` in {`2011-12`, `2013-14`}
+- `participant_id` (SEQN)
+
+This is consolidated from `batches/` and can be used to:
+
+- Drive downloads programmatically
+- Generate new batch files (e.g., split by N per file)
+- Quickly search for SEQNs by cycle
+
+Example to create a new 25‑file batch set (100 IDs each):
+
+```bash
+mkdir -p batches
+tail -n +2 constants/participants.csv | split -l 100 - batches/batch_ --additional-suffix=.txt --numeric-suffixes=1
+sed -i '' 's/^/2011-12,/g' batches/batch_*.txt # if your split lost cycle column, keep both columns otherwise
+```
+
+### Generate batches via helper script
+
+Use `scripts/make_batches_from_constants.py` to create deduped, fixed-size batch files from the canonical list:
+
+```bash
+# Batches of 100 rows each, written to batches/batch_<N>.txt
+python scripts/make_batches_from_constants.py --batch-size 100
+
+# Shuffle the order with a fixed seed, 250 per batch, start numbering at 10
+python scripts/make_batches_from_constants.py --batch-size 250 --shuffle --seed 42 --start-index 10
+
+# Custom paths and naming
+python scripts/make_batches_from_constants.py \
+  --participants constants/participants.csv \
+  --out-dir batches \
+  --prefix nhanes_ \
+  --batch-size 200
+```
 
 ## Scripts guide
 
