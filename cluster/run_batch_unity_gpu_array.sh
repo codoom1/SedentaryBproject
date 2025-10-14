@@ -54,8 +54,8 @@ nvidia-smi || true
 echo "[INFO] Using batch file: $BATCH_FILE"
 echo "[INFO] Writing per-task master: $MASTER_OUT"
 
-# Run: download raw, sleep in sklearn023, posture in deepposture-gpu; write compressed per-task master summary
-python scripts/batch_pipeline.py \
+# Run: execute batch pipeline inside the posture env (has pandas) so summarizer works
+conda run -n "$POSTURE_ENV" --no-capture-output python scripts/batch_pipeline.py \
   --batch-file "$BATCH_FILE" \
   --model "$MODEL" \
   --sleep-conda-env "$SLEEP_ENV" \
