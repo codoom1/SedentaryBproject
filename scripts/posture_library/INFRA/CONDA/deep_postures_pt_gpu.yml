@@ -1,4 +1,4 @@
-name: deep_postures_pytorch_cpu
+name: deep_postures_pytorch_gpu
 channels:
   - conda-forge
   - defaults

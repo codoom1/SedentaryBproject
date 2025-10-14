@@ -31,8 +31,53 @@ conda env create -f environment-posture.yml
 
 # Optional: Posture (GPU) environment
 conda env create -f environment-posture-gpu.yml
+```
 
-# Quick checks
+Troubleshooting: if env creation fails during the pip stage with an error like "TypeError: sequence item 0: expected str instance, dict found", update your local copy of the YAMLs. We removed a malformed pip options block; the fixed files in this repo no longer use a pip section for posture envs (all packages come from conda channels).
+
+Troubleshooting (SWaN/NumPy): if you see errors like "module 'numpy' has no attribute 'float'", your NumPy is too new (>= 1.24 removed np.float). The sleep env is pinned to avoid this, but if your cluster solved a newer NumPy, downgrade to < 1.24:
+
+```bash
+# Preferred (conda)
+conda install -n sklearn023 -c conda-forge 'numpy<1.24' -y
+
+# Alternative (pip inside the env)
+conda run -n sklearn023 pip install 'numpy<1.24'
+
+# Verify
+conda run -n sklearn023 python - <<'PY'
+import numpy as np
+print('numpy=', np.__version__, 'has np.float?', hasattr(np, 'float'))
+PY
+```
+
+Cluster note: if you see a rollback with "No compatible shell found!", set your shell explicitly and retry:
+
+```bash
+export SHELL=/bin/bash
+conda --no-plugins env create -f environment-posture-gpu.yml
+```
+
+Solver note (cluster): if the above with `--no-plugins` errors with "non-default solver backend (libmamba) not recognized", force the classic solver for this command:
+
+```bash
+export CONDA_SOLVER=classic
+conda --no-plugins env create -f environment-posture-gpu.yml
+```
+
+Alternatively, you can pass the flag or set user config once:
+
+```bash
+# One-off flag
+conda env create -f environment-posture-gpu.yml --solver=classic
+
+# Or persist to your ~/.condarc (you can switch back later)
+conda config --set solver classic
+```
+
+### Quick checks
+
+```bash
 conda run -n sklearn023 python scripts/sleep_scripts/sleep_classify.py --help
 conda run -n deepposture python scripts/get_posture_predictions.py --help
 conda run -n deepposture-gpu python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
@@ -43,6 +88,7 @@ Update an existing env after YAML changes:
 ```bash
 conda env update -n sklearn023 -f environment-swan.yml --prune
 conda env update -n deepposture -f environment-posture.yml --prune
+conda env update -n deepposture-gpu -f environment-posture-gpu.yml --prune
 ```
 
 Why preferred:
@@ -95,6 +141,45 @@ python scripts/get_posture_predictions.py --participant-id 62161 --model CHAP_AL
 # or without activating
 conda run -n deepposture python scripts/get_posture_predictions.py --participant-id 62161 --model CHAP_ALL_ADULTS --skip-incomplete-days
 ```
+
+### Optional: Posture (GPU) — manual pip alternative
+
+If the conda YAML for GPU fails on your system/cluster, you can create a clean env and install PyTorch CUDA 12.1 wheels directly via pip. Do not load system CUDA modules or add extra nvidia-* pip packages; the cu121 wheels bundle the CUDA runtime already.
+
+Create a fresh env and install:
+
+```bash
+# Fresh env with Python 3.11
+conda create -n deepposture-gpu python=3.11 pip -y
+conda activate deepposture-gpu
+
+# Ensure any CPU-only torch is removed (safe if not installed)
+pip uninstall -y torch torchvision torchaudio || true
+
+# Install PyTorch + CUDA 12.1 wheels from the official index
+pip install --index-url https://download.pytorch.org/whl/cu121 \
+  torch==2.4.1+cu121 torchvision==0.19.1+cu121 torchaudio==2.4.1+cu121
+
+# Scientific stack
+pip install scikit-learn==1.5.2 pandas numpy scipy h5py tqdm
+```
+
+Validate GPU is visible:
+
+```bash
+python - <<'PY'
+import torch
+print('torch', torch.__version__, 'cuda?', torch.cuda.is_available(), 'cuda', getattr(torch.version,'cuda',None))
+if torch.cuda.is_available():
+  print('device_count=', torch.cuda.device_count(), 'name=', torch.cuda.get_device_name(0))
+PY
+```
+
+Notes:
+
+- Don’t mix with system CUDA modules (e.g., `module load cuda/...`); the cu121 wheels carry their own runtime.
+- Don’t install extra pip packages like `nvidia-cudnn-cu12`; they’re not needed and can conflict.
+- Prefer the conda YAML (`environment-posture-gpu.yml`) when it resolves; use this pip route as a pragmatic fallback.
 
 ## Wrapper scripts (optional)
 

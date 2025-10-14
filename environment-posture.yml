@@ -1,14 +1,11 @@
 name: deepposture
 channels:
-  - conda-forge
   - pytorch
+  - conda-forge
 dependencies:
   - python=3.11
-  - pip
   - pandas
   - numpy
   - scikit-learn=1.5.2
   - pytorch=2.4.1
   - cpuonly
-  - pip:
-      - --only-binary :all:
