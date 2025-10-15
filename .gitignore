@@ -25,7 +25,7 @@ logs/
 # Data: raw, intermediates, predictions, and summaries (regenerate as needed)
 # Comment out individual lines if you intentionally want to commit samples.
 data/
-
+batches/
 # NHANES downloads and other archives
 *.tar
 *.tar.gz

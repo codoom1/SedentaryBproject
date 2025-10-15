@@ -24,13 +24,13 @@ Create from YAML (recommended):
 
 ```bash
 # Sleep / SWaN environment
-conda env create -f environment-swan.yml
+conda env create -f environments/swan.yml
 
 # Posture / DeepPostures environment
-conda env create -f environment-posture.yml
+conda env create -f environments/posture.yml
 
 # Optional: Posture (GPU) environment
-conda env create -f environment-posture-gpu.yml
+conda env create -f environments/posture-gpu.yml
 ```
 
 Troubleshooting: if env creation fails during the pip stage with an error like "TypeError: sequence item 0: expected str instance, dict found", update your local copy of the YAMLs. We removed a malformed pip options block; the fixed files in this repo no longer use a pip section for posture envs (all packages come from conda channels).
@@ -55,21 +55,21 @@ Cluster note: if you see a rollback with "No compatible shell found!", set your 
 
 ```bash
 export SHELL=/bin/bash
-conda --no-plugins env create -f environment-posture-gpu.yml
+conda --no-plugins env create -f environments/posture-gpu.yml
 ```
 
 Solver note (cluster): if the above with `--no-plugins` errors with "non-default solver backend (libmamba) not recognized", force the classic solver for this command:
 
 ```bash
 export CONDA_SOLVER=classic
-conda --no-plugins env create -f environment-posture-gpu.yml
+conda --no-plugins env create -f environments/posture-gpu.yml
 ```
 
 Alternatively, you can pass the flag or set user config once:
 
 ```bash
 # One-off flag
-conda env create -f environment-posture-gpu.yml --solver=classic
+conda env create -f environments/posture-gpu.yml --solver=classic
 
 # Or persist to your ~/.condarc (you can switch back later)
 conda config --set solver classic
@@ -86,9 +86,9 @@ conda run -n deepposture-gpu python -c "import torch; print(torch.__version__, t
 Update an existing env after YAML changes:
 
 ```bash
-conda env update -n sklearn023 -f environment-swan.yml --prune
-conda env update -n deepposture -f environment-posture.yml --prune
-conda env update -n deepposture-gpu -f environment-posture-gpu.yml --prune
+conda env update -n sklearn023 -f environments/swan.yml --prune
+conda env update -n deepposture -f environments/posture.yml --prune
+conda env update -n deepposture-gpu -f environments/posture-gpu.yml --prune
 ```
 
 Why preferred:
@@ -179,7 +179,7 @@ Notes:
 
 - Don’t mix with system CUDA modules (e.g., `module load cuda/...`); the cu121 wheels carry their own runtime.
 - Don’t install extra pip packages like `nvidia-cudnn-cu12`; they’re not needed and can conflict.
-- Prefer the conda YAML (`environment-posture-gpu.yml`) when it resolves; use this pip route as a pragmatic fallback.
+- Prefer the conda YAML (`environments/posture-gpu.yml`) when it resolves; use this pip route as a pragmatic fallback.
 
 ## Wrapper scripts (optional)
 
@@ -207,11 +207,9 @@ chmod +x run_sleep.sh run_posture.sh
 
 ## Notes
 
-- You already have the `swan` (sklearn023) environment active; use it for sleep scripts.
+- If you already have the `swan` (sklearn023) environment active; use it for sleep scripts.
 - Prefer `conda` for the older scikit-learn to avoid building from source.
-- For reproducibility you can export environments to `environment-swan.yml` and `environment-posture.yml` with `conda env export -n <env> > environment-<name>.yml`.
-
-If you'd like, I can add the two `environment-*.yml` files and the wrapper scripts to this repository. Which would you like me to create now?
+// For reproducibility you can export environments to `environments/swan.yml` and `environments/posture.yml` with `conda env export -n <env> > environments/<name>.yml`.
 
 ## Repository structure
 
@@ -232,7 +230,7 @@ SBnovel/
 │  ├─ sleep_predictions/<SEQN>/   # SWaN outputs; per‑day CSVs under predictions/
 │  └─ summaries/                  # Participant and batch‑level hourly summaries
 ├─ constants/
-│  └─ participants.csv            # All (cycle, participant_id) pairs consolidated from batches
+│  └─ participants.csv            # All (cycle, participant_id) pairs. Use in data download
 ├─ scripts/
 │  ├─ batch_pipeline.py           # Batch runner: download → sleep → posture → summarize → append
 │  ├─ run_participant_pipeline.py # Single participant orchestrator (uses conda run if provided)
@@ -245,7 +243,11 @@ SBnovel/
 │  │  └─ sleep_classify.py        # SWaN sleep/non‑wear classification by day
 │  └─ posture_library/MSSE-2021/  # DeepPostures (CHAP) code & pre‑trained models
 ├─ cluster/
-│  └─ run_batch_unity_gpu.slurm   # SLURM array script for Unity GPU partition
+│  └─ run_batch_unity_gpu.sh  # SLURM array batch script for Unity GPU partition
+├─ environments/
+│  ├─ posture.yml
+│  ├─ posture-gpu.yml
+│  └─ swan.yml
 └─ README.md
 ```
 
@@ -264,7 +266,7 @@ We provide `constants/participants.csv` with columns:
 - `cycle` in {`2011-12`, `2013-14`}
 - `participant_id` (SEQN)
 
-This is consolidated from `batches/` and can be used to:
+This can be used to:
 
 - Drive downloads programmatically
 - Generate new batch files (e.g., split by N per file)
@@ -385,8 +387,8 @@ Create a CUDA-enabled posture environment using the provided YAML and validate G
 
 ```bash
 # One-time: create envs on the cluster login node
-conda env create -f environment-swan.yml          # sleep
-conda env create -f environment-posture-gpu.yml   # posture (GPU)
+conda env create -f environments/swan.yml          # sleep
+conda env create -f environments/posture-gpu.yml   # posture (GPU)
 
 # Sanity checks
 conda run -n deepposture-gpu python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
@@ -399,7 +401,7 @@ if torch.cuda.is_available():
 PY
 ```
 
-The SLURM script requests a GPU with `#SBATCH --gres=gpu:1` and sets `POSTURE_ENV=deepposture-gpu`. If your cluster uses different partition names or CUDA versions, adjust `-p` and the `pytorch-cuda` version in `environment-posture-gpu.yml` accordingly.
+The SLURM script requests a GPU with `#SBATCH --gpus=1` and sets `POSTURE_ENV=deepposture-gpu`. If your cluster uses different partition names or CUDA versions, adjust `-p` and the `pytorch-cuda` version in `environments/posture-gpu.yml` accordingly.
 
 ## Outputs and definitions
 
@@ -414,7 +416,7 @@ The SLURM script requests a GPU with `#SBATCH --gres=gpu:1` and sets `POSTURE_EN
 ## Notes on reproducibility
 
 - Use `conda run -n <env>` to pin binary dependencies across steps.
-- The YAML files (`environment-swan.yml`, `environment-posture.yml`) are included and preferred for setup. If you customize locally, you can export your updates:
-  - conda env export -n sklearn023 > environment-swan.yml
-  - conda env export -n deepposture > environment-posture.yml
+- The YAML files (`environments/environment-swan.yml`, `environments/environment-posture.yml`) are included and preferred for setup. If you customize locally, you can export your updates:
+  - conda env export -n sklearn023 > environments/environment-swan.yml
+  - conda env export -n deepposture > environments/environment-posture.yml
 - Batch runs will, by default, clean up participant directories after summarization to save disk; pass `--no-cleanup` to keep all intermediates.
