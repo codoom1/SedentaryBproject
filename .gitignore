@@ -26,6 +26,7 @@ logs/
 # Comment out individual lines if you intentionally want to commit samples.
 data/
 batches/
+notebooks/
 # NHANES downloads and other archives
 *.tar
 *.tar.gz

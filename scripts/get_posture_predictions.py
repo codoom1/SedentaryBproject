@@ -6,15 +6,15 @@ This script demonstrates a step-by-step pipeline:
 3. Runs make_predictions.py on the preprocessed data.
 """
 
-import os
-import subprocess
-import argparse
-import pathlib
-import sys
-import shutil
-import glob
-import tempfile
-from typing import Optional, Callable, Any
+import os  # For path manipulations
+import subprocess  # For running external scripts
+import argparse # For command-line argument parsing
+import pathlib # For path manipulations
+import sys # For sys.executable
+import shutil # For file operations
+import glob # For file pattern matching
+import tempfile # For temporary directories
+from typing import Optional, Callable, Any # For type hints
 
 # Optional helper to convert raw NHANES .sensor.csv files into daily ActiGraph CSVs
 try:
@@ -24,13 +24,13 @@ except Exception:
     prepare_deeppostures_format = None
 
 # Resolve paths relative to the repository root regardless of cwd
-THIS_FILE = pathlib.Path(__file__).resolve()
+THIS_FILE = pathlib.Path(__file__).resolve() # this script produces absolute path
 REPO_ROOT = THIS_FILE.parents[1]
 
 # The DeepPosture model code has been moved inside the nested directory 'posture_library/MSSE-2021'.
 # For backward compatibility (in case someone still has the old layout), we detect which path exists.
 _candidate_new = REPO_ROOT / "scripts" / "posture_library" / "MSSE-2021"
-_candidate_old = REPO_ROOT / "MSSE-2021"  # legacy (pre-move)
+_candidate_old = REPO_ROOT / "MSSE-2021"  # legacy (pre-move) ## This is not needed anymore
 
 
 
