@@ -40,16 +40,20 @@ except ImportError:
     print("  pip install SWaN_accel")
     SWAN_AVAILABLE = False
 
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('scripts/sleep_scripts/sleep_classification.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
+# Disable logging: define a no-op logger so existing calls don't output
+class _NoOpLogger:
+    def debug(self, *args, **kwargs):
+        pass
+    def info(self, *args, **kwargs):
+        pass
+    def warning(self, *args, **kwargs):
+        pass
+    def error(self, *args, **kwargs):
+        pass
+    def setLevel(self, *args, **kwargs):
+        pass
+
+logger = _NoOpLogger()
 
 
 def load_raw_sensor_data(participant_dir):

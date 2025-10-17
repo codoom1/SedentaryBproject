@@ -62,12 +62,14 @@ Augment posture + sleep (expanded to 10s) + VM together:
 		--participant-id 62596
 
 Auto-run pipeline if input CSV is missing (downloads if needed):
-	python scripts/helper_scripts/compute_vm_aug_predictions.py --input-csv data/processed/62596/2000-01-12.csv  --output-path data/augmented_predictions/62596/CHAP_ALL_ADULTS/2011-12-01.csv  --participant-id 62596 
-        --posture-model CHAP_ALL_ADULTS 
-        --cycle 2011-12 
-        --auto-run-pipeline 
-        --download 
-        --date 2000-01-12
+	python scripts/helper_scripts/compute_vm_aug_predictions.py --input-csv data/processed/62596/2000-01-12.csv --output-path data/augmented_predictions/62596/CHAP_ALL_ADULTS/2011-12-01.csv --participant-id 62596 --date 2000-01-12
+
+Participant-first workflow (no dates needed; auto-run default):
+	# Process ALL available days for a participant; cycle inferred from constants
+	python scripts/helper_scripts/compute_vm_aug_predictions.py --participant-id 62596 --posture-model CHAP_ALL_ADULTS
+
+	# Process a specific day only
+	python scripts/helper_scripts/compute_vm_aug_predictions.py --participant-id 62596 --date 2011-12-01
 
 Notes
 -----
@@ -107,6 +109,7 @@ import pandas as pd
 import subprocess
 from pathlib import Path
 import shutil
+from typing import Optional, List
 
 
 def parse_header_and_start_time(csv_path):
@@ -401,7 +404,7 @@ def check_day_completeness(csv_path):
 # --------------------
 # Wrapper functionality
 # --------------------
-def _find_prediction_file(pred_dir: Path, date_str: str) -> Path | None:
+def _find_prediction_file(pred_dir: Path, date_str: str) -> Optional[Path]:
 	"""Return a posture prediction CSV path for the given day if found.
 
 	Tries pred_dir/date_str.csv first, then scans for files starting with date_str.
@@ -415,15 +418,22 @@ def _find_prediction_file(pred_dir: Path, date_str: str) -> Path | None:
 	return None
 
 
-def _expand_sleep_30s_to_10s(sleep_df: pd.DataFrame, target_day: str) -> pd.DataFrame | None:
+def _expand_sleep_30s_to_10s(sleep_df: pd.DataFrame, target_day: str) -> Optional[pd.DataFrame]:
 	"""Filter sleep predictions to target_day and expand from 30s to 10s cadence.
 
 	Returns a DataFrame with 'timestamp' as string (YYYY-MM-DD HH:MM:SS),
 	or None if no rows match the target_day.
 	"""
-	if 'timestamp' not in sleep_df.columns:
-		raise ValueError("Sleep predictions CSV missing 'timestamp'")
 	sdf = sleep_df.copy()
+	# Normalize timestamp column from possible alternatives
+	if 'timestamp' not in sdf.columns:
+		for alt in ['START_TIME', 'HEADER_TIME_STAMP', 'start_time', 'StartTime']:
+			if alt in sdf.columns:
+				sdf = sdf.rename(columns={alt: 'timestamp'})
+				break
+	if 'timestamp' not in sdf.columns:
+		print("[WARN] Sleep predictions CSV missing 'timestamp' (and no known alternatives); skipping sleep merge")
+		return None
 	sdf['timestamp'] = pd.to_datetime(sdf['timestamp'], errors='coerce')
 	sdf = sdf.dropna(subset=['timestamp'])
 	day_mask = sdf['timestamp'].dt.strftime('%Y-%m-%d') == target_day
@@ -445,18 +455,18 @@ def _expand_sleep_30s_to_10s(sleep_df: pd.DataFrame, target_day: str) -> pd.Data
 def run_pipeline_and_augment_single_day(
 	participant_id: str,
 	date_str: str,
-	cycle: str = "2011-12",
+	cycle: Optional[str] = None,
 	posture_model: str = "CHAP_ALL_ADULTS",
-	repo_root: Path | None = None,
-	processed_root: Path | None = None,
-	predictions_root: Path | None = None,
-	sleep_root: Path | None = None,
-	output_root: Path | None = None,
-	sleep_conda_env: str="sklearn023",
-	posture_conda_env: str="deepposture",
+	repo_root: Optional[Path] = None,
+	processed_root: Optional[Path] = None,
+	predictions_root: Optional[Path] = None,
+	sleep_root: Optional[Path] = None,
+	output_root: Optional[Path] = None,
+	sleep_conda_env: str = "sklearn023",
+	posture_conda_env: str = "deepposture",
 	skip_incomplete_days_sleep: bool = True,
 	skip_incomplete_days_posture: bool = True,
-	download: bool = False,
+	download: bool = True,
 ) -> Path:
 	"""
 	Orchestrate pipeline -> VM compute -> augmentation for a single participant/day.
@@ -484,11 +494,19 @@ def run_pipeline_and_augment_single_day(
 		Path to the augmented CSV written under output_root/participant_id/posture_model/date_str.csv
 	"""
 	# Resolve roots
-	repo_root = repo_root or Path(__file__).resolve().parents[1]
+	# This file is at scripts/helper_scripts/, repo root is two levels up
+	repo_root = repo_root or Path(__file__).resolve().parents[2]
 	processed_root = processed_root or (repo_root / "data" / "processed")
 	predictions_root = predictions_root or (repo_root / "data" / "predictions")
 	sleep_root = sleep_root or (repo_root / "data" / "sleep_predictions")
 	output_root = output_root or (repo_root / "data" / "augmented_predictions")
+
+	# Infer cycle if not provided from constants/participants.csv
+	if cycle is None:
+		constants_path = repo_root / "constants" / "participants.csv"
+		cycle = infer_cycle_for_participant(constants_path, participant_id)
+		if cycle is None:
+			raise ValueError(f"Unable to infer cycle for participant {participant_id} from {constants_path}")
 
 	# 1) Run participant pipeline to ensure predictions exist
 	pipeline_script = repo_root / "scripts" / "run_participant_pipeline.py"
@@ -504,7 +522,7 @@ def run_pipeline_and_augment_single_day(
 	if posture_conda_env:
 		cmd += ["--posture-conda-env", posture_conda_env]
 
-	# Request download if needed
+	# Request download by default
 	if download:
 		cmd.append("--download")
 
@@ -564,6 +582,124 @@ def run_pipeline_and_augment_single_day(
 	return out_path
 
 
+def infer_cycle_for_participant(constants_csv: Path, participant_id: str) -> Optional[str]:
+	"""Infer cycle for a participant by scanning constants/participants.csv.
+
+	The constants file is expected to contain rows of form: cycle,participant_id
+	with an optional header. Returns the first matching cycle as a string.
+	"""
+	if not constants_csv.exists():
+		return None
+	pid = str(participant_id)
+	with constants_csv.open('r', newline='') as f:
+		reader = csv.reader(f)
+		for row in reader:
+			if not row or row[0].strip().startswith('#'):
+				continue
+			if len(row) < 2:
+				continue
+			c0 = (row[0] or '').strip().lstrip('\ufeff').lower()
+			c1 = (row[1] or '').strip().lower()
+			# Skip header
+			if c0 == 'cycle' and c1 == 'participant_id':
+				continue
+			cycle = row[0].strip()
+			pid_row = row[1].strip()
+			if pid_row == pid:
+				return cycle
+	return None
+
+
+def process_participant_all_days(
+	participant_id: str,
+	cycle: Optional[str] = None,
+	posture_model: str = "CHAP_ALL_ADULTS",
+	repo_root: Optional[Path] = None,
+	processed_root: Optional[Path] = None,
+	predictions_root: Optional[Path] = None,
+	sleep_root: Optional[Path] = None,
+	output_root: Optional[Path] = None,
+	sleep_conda_env: str = "sklearn023",
+	posture_conda_env: str = "deepposture",
+	skip_incomplete_days_sleep: bool = True,
+	skip_incomplete_days_posture: bool = True,
+	download: bool = True,
+) -> List[Path]:
+	"""Run pipeline for the participant (ensuring predictions), then process all days.
+
+	Returns list of written augmented CSV paths.
+	"""
+	repo_root = repo_root or Path(__file__).resolve().parents[2]
+	processed_root = processed_root or (repo_root / "data" / "processed")
+	predictions_root = predictions_root or (repo_root / "data" / "predictions")
+	sleep_root = sleep_root or (repo_root / "data" / "sleep_predictions")
+	output_root = output_root or (repo_root / "data" / "augmented_predictions")
+
+	# Infer cycle if not provided
+	if cycle is None:
+		constants_path = repo_root / "constants" / "participants.csv"
+		cycle = infer_cycle_for_participant(constants_path, participant_id)
+		if cycle is None:
+			raise ValueError(f"Unable to infer cycle for participant {participant_id} from {constants_path}")
+
+	# Run participant pipeline once
+	pipeline_script = repo_root / "scripts" / "run_participant_pipeline.py"
+	cmd = [sys.executable, str(pipeline_script), "--participant-id", participant_id, "--cycle", cycle, "--posture-model", posture_model]
+	if skip_incomplete_days_sleep:
+		cmd.append("--skip-incomplete-days-sleep")
+	if skip_incomplete_days_posture:
+		cmd.append("--skip-incomplete-days-posture")
+	if sleep_conda_env:
+		cmd += ["--sleep-conda-env", sleep_conda_env]
+	if posture_conda_env:
+		cmd += ["--posture-conda-env", posture_conda_env]
+	if download:
+		cmd.append("--download")
+	subprocess.run(cmd, check=True)
+
+	# Process each daily CSV under processed_root/pid/
+	pid = str(participant_id)
+	day_dir = processed_root / pid
+	if not day_dir.exists():
+		raise FileNotFoundError(f"Processed directory not found for participant {pid}: {day_dir}")
+
+	written: List[Path] = []
+	for daily_csv in sorted(day_dir.glob("*.csv")):
+		date_str = daily_csv.stem
+		# reuse single-day augmentation without re-running pipeline per day
+		pred_dir = predictions_root / pid / posture_model
+		pred_csv = _find_prediction_file(pred_dir, date_str)
+		if pred_csv is None:
+			# Skip days without predictions (should be rare if pipeline ran)
+			continue
+		# Compute VM
+		vm_rows = process_csv(str(daily_csv))
+		vm_df = pd.DataFrame(vm_rows, columns=['timestamp', 'avg_vm_10s', 'is_midnight_block'])
+		# Load posture
+		pred_df = pd.read_csv(pred_csv)
+		pred_df['timestamp'] = pd.to_datetime(pred_df['timestamp'], errors='coerce')
+		pred_df = pred_df.dropna(subset=['timestamp'])
+		pred_df['timestamp'] = pred_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+		pred_df = pred_df[pred_df['timestamp'].str.startswith(date_str)].copy()
+		if pred_df.empty:
+			continue
+		merged = pd.merge(pred_df, vm_df, on='timestamp', how='left')
+		# Sleep (optional)
+		sleep_csv_path = sleep_root / pid / "predictions" / f"{date_str}_sleep_predictions.csv"
+		if sleep_csv_path.exists():
+			sleep_df = pd.read_csv(sleep_csv_path)
+			sleep10 = _expand_sleep_30s_to_10s(sleep_df, date_str)
+			if sleep10 is not None:
+				merged = pd.merge(merged, sleep10, on='timestamp', how='left', suffixes=('', '_sleep'))
+		# Write
+		out_path = output_root / pid / posture_model / f"{date_str}.csv"
+		out_path.parent.mkdir(parents=True, exist_ok=True)
+		merged.to_csv(out_path, index=False)
+		written.append(out_path)
+
+	return written
+
+
 
 
 def main():
@@ -578,17 +714,19 @@ def main():
 		- Validates the input CSV is a complete day per check_day_completeness().
 		- Writes one per-day VM file into output-dir (no combined output).
 	"""
-	parser = argparse.ArgumentParser(description="Compute 10s VM features for a single daily CSV (complete days only), with optional predictions augmentation. Can auto-run the participant pipeline when data are missing.")
-	parser.add_argument('--input-csv', required=True, help='Path to a single daily accelerometer CSV file')
+	parser = argparse.ArgumentParser(description="Compute 10s VM features, optionally augment with posture and sleep. With only --participant-id, auto-run pipeline and process all days by default.")
+	parser.add_argument('--input-csv', help='Path to a single daily accelerometer CSV file (if not provided, use --participant-id workflows)')
 	parser.add_argument('--output-dir', default='data/features', help='Directory to write the per-day VM CSV file (when not augmenting)')
 	parser.add_argument('--predictions-csv', help='Optional: path to a predictions CSV for the same day to augment with VM')
 	parser.add_argument('--output-path', help='Optional: exact output path for augmented predictions+VM CSV (required when using --predictions-csv)')
 	parser.add_argument('--sleep-predictions-csv', help='Optional: path to a sleep predictions CSV (30s cadence) to be expanded to 10s and merged')
-	parser.add_argument('--participant-id', help='Optional: participant ID to validate against predictions file contents/paths')
+	parser.add_argument('--participant-id', help='Participant ID; required for participant-first workflows')
 	# Auto-run wrapper/pipeline options
-	parser.add_argument('--auto-run-pipeline', action='store_true', help='If input/predictions are missing, run the participant pipeline automatically and retry')
-	parser.add_argument('--download', action='store_true', help='When auto-running pipeline, download raw data before running')
-	parser.add_argument('--cycle', default='2011-12', help='NHANES cycle to use when auto-running pipeline (default: 2011-12)')
+	parser.add_argument('--auto-run-pipeline', dest='auto_run_pipeline', action='store_true', default=True, help='Run the participant pipeline automatically (default: enabled)')
+	parser.add_argument('--no-auto-run-pipeline', dest='auto_run_pipeline', action='store_false', help='Disable auto-running the participant pipeline')
+	parser.add_argument('--download', dest='download', action='store_true', default=True, help='Download raw data when auto-running pipeline (default: enabled)')
+	parser.add_argument('--no-download', dest='download', action='store_false', help='Do not download raw data when auto-running pipeline')
+	parser.add_argument('--cycle', help='NHANES cycle; if omitted, inferred from constants/participants.csv')
 	parser.add_argument('--posture-model', default='CHAP_ALL_ADULTS', help='Posture model to use when auto-running pipeline')
 	parser.add_argument('--date', help='Target day (YYYY-MM-DD). Required for auto-run if cannot infer from paths')
 	args = parser.parse_args()
@@ -596,7 +734,7 @@ def main():
 	input_csv = args.input_csv
 
 	# Helper: infer date (YYYY-MM-DD) from provided paths or --date
-	def _infer_day() -> str | None:
+	def _infer_day() -> Optional[str]:
 		candidates = [args.input_csv, args.predictions_csv, args.sleep_predictions_csv]
 		for p in candidates:
 			if not p:
@@ -614,7 +752,7 @@ def main():
 
 	inferred_day = _infer_day()
 
-	if not os.path.isfile(input_csv):
+	if input_csv and not os.path.isfile(input_csv):
 		if args.auto_run_pipeline and args.participant_id and inferred_day:
 			# Use the higher-level wrapper to create augmented output end-to-end
 			print("[INFO] Input CSV missing. Auto-running pipeline wrapper...")
@@ -639,6 +777,37 @@ def main():
 			if not inferred_day:
 				print("Hint: provide --date YYYY-MM-DD or a path containing the date to auto-run")
 			sys.exit(1)
+
+	# Participant-first workflows (no input-csv) -> process all days or a specific day
+	if not input_csv and args.participant_id:
+		if not args.auto_run_pipeline:
+			print("[ERROR] Participant-first workflow requires auto-run enabled (default)")
+			sys.exit(1)
+		if args.date:
+			# Single day
+			out_path = run_pipeline_and_augment_single_day(
+				participant_id=str(args.participant_id),
+				date_str=args.date,
+				cycle=args.cycle,
+				posture_model=args.posture_model,
+				download=bool(args.download),
+			)
+			print(f"[INFO] Wrote: {out_path}")
+			return
+		else:
+			# All days for participant
+			written = process_participant_all_days(
+				participant_id=str(args.participant_id),
+				cycle=args.cycle,
+				posture_model=args.posture_model,
+				download=bool(args.download),
+			)
+			print(f"[INFO] Wrote {len(written)} augmented files for participant {args.participant_id}")
+			for p in written[:5]:
+				print(f" - {p}")
+			if len(written) > 5:
+				print(" ...")
+			return
 
 	# Enforce complete day requirement
 	is_complete, start_time, end_time, reason = check_day_completeness(input_csv)
