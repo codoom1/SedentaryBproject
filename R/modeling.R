@@ -21,7 +21,7 @@ library(readr)
 library(lme4)
 library(emmeans)
 library(pbkrtest)
-#library(tibble)
+library(tibble)
 
 ## Load helper functions for preprocessing and modeling
 source("R/model_utils.R")

@@ -47,3 +47,4 @@ scripts/posture_library/MSSE-2021/example/
 # Misc caches
 *.cache/
 .cache/
+.Rproj.user

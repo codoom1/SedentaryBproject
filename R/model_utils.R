@@ -28,7 +28,8 @@ data_load <- function() {
   } else {
     message("[WARN] Nonsleep dataset not found at ", ns_path, "; proceeding without covariates.")
   }
-  df <- dplyr::arrange(df, Day, ID, Hour)
+  df <- dplyr::arrange(df, ID,Day, Hour)
+  df <- rename(df, percentSedentary=percent_sitting)
   df
 }
 
