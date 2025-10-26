@@ -30,6 +30,10 @@ OUTPUT_ROOT="/project/pi_bpachev_umass_edu/SBnovel_outputs"
 mkdir -p logs "$DATA_ROOT" "$OUTPUT_ROOT"
 mkdir -p "$DATA_ROOT"/raw "$DATA_ROOT"/processed "$DATA_ROOT"/preprocessed "$DATA_ROOT"/predictions "$DATA_ROOT"/sleep_predictions "$DATA_ROOT"/summaries
 
+# Dedicated temp base for sleep step under DATA_ROOT (unique per job/task)
+SLEEP_TMP_BASE="$DATA_ROOT/tmp/sleep/${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+mkdir -p "$SLEEP_TMP_BASE"
+
 # Redirect repo/data -> $DATA_ROOT so all pipeline writes land on /work
 if [ -e data ] && [ ! -L data ]; then
   mv data "data_backup_${SLURM_ARRAY_TASK_ID}" || true
@@ -53,7 +57,9 @@ nvidia-smi || true
 
 echo "[INFO] Using batch file: $BATCH_FILE"
 echo "[INFO] Writing per-task master: $MASTER_OUT"
+echo "[INFO] Sleep temp base: $SLEEP_TMP_BASE"
 
+mkdir -p batch_failed
 # Run: execute batch pipeline inside the posture env (has pandas) so summarizer works
 conda run -n "$POSTURE_ENV" --no-capture-output python scripts/batch_pipeline.py \
   --batch-file "$BATCH_FILE" \
@@ -61,4 +67,7 @@ conda run -n "$POSTURE_ENV" --no-capture-output python scripts/batch_pipeline.py
   --sleep-conda-env "$SLEEP_ENV" \
   --posture-conda-env "$POSTURE_ENV" \
   --master-out "$MASTER_OUT" \
+  --sleep-tmp-dir "$SLEEP_TMP_BASE" \
+  --sleep-max-subdivision-depth 4 \
+  --sleep-min-chunk-minutes 3 \
   --download

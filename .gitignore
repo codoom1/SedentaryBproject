@@ -48,3 +48,6 @@ scripts/posture_library/MSSE-2021/example/
 *.cache/
 .cache/
 .Rproj.user
+.RData
+.Rhistory
+.Rprofile

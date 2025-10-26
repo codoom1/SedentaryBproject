@@ -429,7 +429,7 @@ fit_diag_by_hour <- function(df, weights, extra_fixed = NULL) {
   fixed_terms <- c("Hour", extra_fixed)
   fixed_terms <- unique(fixed_terms[!is.na(fixed_terms) & nzchar(fixed_terms)])
   fixed_rhs <- paste(fixed_terms, collapse = " + ")
-  form <- as.formula(paste0("percent_sitting ~ ", fixed_rhs, " + (0 + ", re_cols, " || ID)"))
+  form <- as.formula(paste0("percentSedentary ~ ", fixed_rhs, " + (0 + ", re_cols, " || ID)"))
   ctl  <- lmerControl(optimizer = "bobyqa")
   lmer(form, data = md, REML = TRUE, control = ctl, weights = weights)
 }
@@ -631,7 +631,8 @@ plot_emm_by_hour <- function(emm_res,
     geom_ribbon(data = plot_df_main,
                 aes(x = Hour_num, ymin = LCL, ymax = UCL, fill = emm_level_plot,
                     group = interaction(emm_level_plot, DayType)),
-                alpha = 0.25, colour = NA)
+                alpha = 0.25, colour = NA
+                )
   
   # overall ribbon: only draw if include_overall == TRUE and there are rows
   if (include_overall && nrow(plot_df_overall) > 0) {

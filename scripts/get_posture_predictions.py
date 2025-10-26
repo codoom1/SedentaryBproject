@@ -56,6 +56,13 @@ PREDICT_SCRIPT = None
 GT3X_FREQUENCY = 80
 DOWN_SAMPLE_FREQUENCY = 10
 
+# Try to import a helper for day completeness checks; fall back to naive logic if unavailable
+try:
+    sys.path.insert(0, str((REPO_ROOT / "scripts").resolve()))
+    from helper_scripts.compute_vm_aug_predictions import check_day_completeness  # type: ignore
+except Exception:
+    check_day_completeness = None  # type: ignore
+
 def run_preprocessing(main_csv_dir, preprocessed_dir, preprocess_script, gt3x_frequency, down_sample_frequency, skip_incomplete_days=False, verbose=False):
     print(f"[get_posture_predictions] Starting preprocessing for: {main_csv_dir}")
     os.makedirs(preprocessed_dir, exist_ok=True)
@@ -65,20 +72,45 @@ def run_preprocessing(main_csv_dir, preprocessed_dir, preprocess_script, gt3x_fr
         temp_dir = tempfile.mkdtemp()
         csv_files = sorted(glob.glob(os.path.join(main_csv_dir, "*.csv*")))
 
-        if len(csv_files) > 2:  # Only filter if we have more than 2 files
-            # Skip first and last CSV files
-            filtered_files = csv_files[1:-1]
-            print(f"[getpred_pipeline] Filtering out incomplete days: skipping {len(csv_files) - len(filtered_files)} files")
-            print(f"[getpred_pipeline] Skipped files: {os.path.basename(csv_files[0])}, {os.path.basename(csv_files[-1])}")
+        if not csv_files:
+            print("[getpred_pipeline] ERROR: No day-level CSV files found to preprocess.")
+            sys.exit(1)
 
-            # Copy filtered files to temp directory
-            for file_path in filtered_files:
-                shutil.copy2(file_path, temp_dir)
+        # New rule: keep only strict 24h days (00:00:00 to next 00:00:00) regardless of file count
+        kept_files = []
+        skipped_files = []
 
-            csv_source_dir = temp_dir
+        if check_day_completeness is not None:
+            for fp in csv_files:
+                ok, start_time, end_time, reason = check_day_completeness(fp)
+                # Accept the helper's completeness decision: starts at 00:00 and ends at 23:59:xx or next 00:00, duration 23–25h
+                if ok:
+                    kept_files.append(fp)
+                else:
+                    skipped_files.append((fp, start_time, end_time, reason))
         else:
-            print(f"[getpred_pipeline] Not enough CSV files to filter (found {len(csv_files)})")
-            csv_source_dir = main_csv_dir
+            print("[getpred_pipeline] Warning: strict completeness checker unavailable; falling back to naive first/last skip logic.")
+            kept_files = csv_files[1:-1] if len(csv_files) > 2 else []
+            for idx, fp in enumerate(csv_files):
+                if fp not in kept_files:
+                    skipped_files.append((fp, None, None, 'fallback_naive_skip'))
+
+        if skipped_files:
+            print(f"[getpred_pipeline] Skipping {len(skipped_files)} incomplete day file(s):")
+            for fp, st, et, rsn in skipped_files:
+                base = os.path.basename(fp)
+                print(f"  - {base} (start={st}, end={et}) reason={rsn}")
+
+        if not kept_files:
+            print("[getpred_pipeline] ERROR: All day-level files are incomplete under strict 24h rule. Nothing to preprocess.")
+            # Clean up temp_dir before exiting
+            shutil.rmtree(temp_dir)
+            sys.exit(1)
+
+        print(f"[getpred_pipeline] Keeping {len(kept_files)} file(s) after filtering incomplete days.")
+        for file_path in kept_files:
+            shutil.copy2(file_path, temp_dir)
+        csv_source_dir = temp_dir
     else:
         csv_source_dir = main_csv_dir
 
@@ -120,7 +152,7 @@ if __name__ == "__main__":
     parser.add_argument('--participant-id', type=str, required=True, help='Participant ID to process')
     parser.add_argument('--model', type=str, default='CHAP_A', help='Model subfolder to use for predictions (e.g., CHAP_A, CHAP_ALL_ADULTS)')
     parser.add_argument('--padding', type=str, default='drop', help='Padding for predictions (default: drop)')
-    parser.add_argument('--skip-incomplete-days', action='store_true', help='Skip first and last day CSV files (incomplete data)')
+    parser.add_argument('--skip-incomplete-days', action='store_true', help='Skip day-level CSVs that are not full days: start at 00:00:00 and end at 23:59:xx or next 00:00:00 (23–25 hours)')
     parser.add_argument('--model-root', type=str, default=None, help='Path to MSSE-2021 model root (overrides automatic detection)')
     parser.add_argument('--gt3x-frequency', type=int, default=GT3X_FREQUENCY, help=f'GT3X sample frequency (default: {GT3X_FREQUENCY})')
     parser.add_argument('--down-sample-frequency', type=int, default=DOWN_SAMPLE_FREQUENCY, help=f'Down-sample frequency (default: {DOWN_SAMPLE_FREQUENCY})')

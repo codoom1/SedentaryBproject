@@ -43,13 +43,16 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 
-def run_cmd(cmd, dry_run=False):
+def run_cmd(cmd, dry_run=False, timeout=None):
     logger.info('CMD: %s', ' '.join(cmd))
     if dry_run:
         return 0
     try:
-        res = subprocess.run(cmd, check=True)
+        res = subprocess.run(cmd, check=True, timeout=timeout)
         return res.returncode
+    except subprocess.TimeoutExpired as e:
+        logger.error('Command timed out after %ss: %s', timeout, ' '.join(cmd))
+        return 124  # convention: 124 for timeout
     except subprocess.CalledProcessError as e:
         # try to include any stderr text if available
         try:
@@ -131,7 +134,11 @@ def process_batch(batch_file: Path, model: str, master_out: Path, sleep_conda_en
                   keep_on_error: bool = False,
                   do_cleanup: bool = True,
                   keep_participant_summaries: bool = False,
-                  compress_master: bool = True):
+                  compress_master: bool = True,
+                  sleep_tmp_dir: Optional[str] = None,
+                  sleep_max_subdivision_depth: Optional[int] = None,
+                  sleep_min_chunk_minutes: Optional[int] = None,
+                  participant_timeout: int = 7200):
 
     repo = Path.cwd()
     run_pipeline_py = repo / 'scripts' / 'run_participant_pipeline.py'
@@ -140,6 +147,13 @@ def process_batch(batch_file: Path, model: str, master_out: Path, sleep_conda_en
     if not batch_file.exists():
         logger.error('Batch file not found: %s', batch_file)
         return
+
+    # Ensure provided sleep tmp base exists if specified
+    if sleep_tmp_dir:
+        try:
+            Path(sleep_tmp_dir).mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning('Could not create sleep tmp dir %s: %s', sleep_tmp_dir, e)
 
     rows: List[Tuple[str, str]] = []
     with open(batch_file, 'r') as f:
@@ -154,6 +168,7 @@ def process_batch(batch_file: Path, model: str, master_out: Path, sleep_conda_en
                 logger.error('Invalid row in batch file (expected "cycle,participant_id"): %s', r)
                 continue
             rows.append((r[0].strip(), r[1].strip()))
+
 
     for idx, (cycle, pid) in enumerate(rows, 1):
         logger.info('[%d/%d] Processing participant %s (cycle=%s)', idx, len(rows), pid, cycle)
@@ -173,15 +188,39 @@ def process_batch(batch_file: Path, model: str, master_out: Path, sleep_conda_en
             pipeline_cmd += ['--posture-conda-env', posture_conda_env]
         if download:
             pipeline_cmd += ['--download']
+        if sleep_tmp_dir:
+            pipeline_cmd += ['--sleep-tmp-dir', sleep_tmp_dir]
+        # Advanced robust sleep options
+        if sleep_max_subdivision_depth is not None:
+            pipeline_cmd += ['--sleep-max-subdivision-depth', str(sleep_max_subdivision_depth)]
+        if sleep_min_chunk_minutes is not None:
+            pipeline_cmd += ['--sleep-min-chunk-minutes', str(sleep_min_chunk_minutes)]
         # Always skip incomplete days for both sleep and posture
         pipeline_cmd += ['--skip-incomplete-days-sleep', '--skip-incomplete-days-posture']
 
-        rc = run_cmd(pipeline_cmd, dry_run=dry_run)
+        # Timeout and failed logging logic
+        batch_failed_dir = Path('batch_failed')
+        batch_failed_dir.mkdir(exist_ok=True)
+        batch_failed_path = batch_failed_dir / (batch_file.stem + '_failed.txt')
+        rc = run_cmd(pipeline_cmd, dry_run=dry_run, timeout=participant_timeout)
         if rc != 0:
-            logger.error('Pipeline failed for %s (rc=%s)', pid, rc)
-            if not keep_on_error:
-                logger.info('Skipping summarization and cleanup for %s', pid)
-                continue
+            logger.error('Pipeline failed or timed out for %s (rc=%s)', pid, rc)
+            # Log to batch-specific failed file in batch_failed/
+            with open(batch_failed_path, 'a') as failf:
+                failf.write(f"{cycle},{pid}\n")
+            logger.info('Logged failed participant %s,%s to %s', cycle, pid, batch_failed_path)
+            # Always skip summarization for failed participants, but do cleanup if enabled
+            if do_cleanup:
+                cleanup_participant(pid, cycle or 'unknown_cycle', model)
+            continue
+
+        # If sleep had no complete days, participant runner will skip posture and produce no per-day sleep outputs.
+        sleep_preds_dir = repo / 'data' / 'sleep_predictions' / pid / 'predictions'
+        if not (sleep_preds_dir.exists() and any(sleep_preds_dir.glob('*.csv'))):
+            logger.warning('Participant %s: no complete sleep-day outputs found; skipping summarization.', pid)
+            if do_cleanup:
+                cleanup_participant(pid, cycle or 'unknown_cycle', model)
+            continue
 
         # Build summarizer command with either a temp output or a persistent file
         if keep_participant_summaries:
@@ -233,6 +272,9 @@ def main():
     parser.add_argument('--sleep-conda-env', default=None)
     parser.add_argument('--posture-conda-env', default=None)
     parser.add_argument('--download', action='store_true', help='Run with --download to fetch raw archives')
+    parser.add_argument('--sleep-tmp-dir', default=None, help='Temp directory for sleep step (forwarded to participant runner)')
+    parser.add_argument('--sleep-max-subdivision-depth', type=int, default=None, help='Maximum depth for recursive chunk subdivision (forwarded to participant runner)')
+    parser.add_argument('--sleep-min-chunk-minutes', type=int, default=None, help='Minimum chunk duration in minutes before subdivision stops (forwarded to participant runner)')
     parser.add_argument('--dry-run', action='store_true', help='Print commands but do not execute')
     parser.add_argument('--keep-on-error', action='store_true', help='Do not stop on participant error; skip summarization/cleanup')
     parser.add_argument('--no-cleanup', action='store_true', help='Do not delete participant data after summarization')
@@ -259,10 +301,13 @@ def main():
                   keep_on_error=args.keep_on_error,
                   do_cleanup=(not args.no_cleanup),
                   keep_participant_summaries=args.keep_participant_summaries,
-                  compress_master=args.compress_master)
+                  compress_master=args.compress_master,
+                  sleep_tmp_dir=args.sleep_tmp_dir,
+                  sleep_max_subdivision_depth=args.sleep_max_subdivision_depth,
+                  sleep_min_chunk_minutes=args.sleep_min_chunk_minutes)
 
 
 if __name__ == '__main__':
     main()
 
-# python scripts/batch_pipeline.py --batch-file batches/batch_1.txt --model CHAP_ALL_ADULTS --sleep-conda-env sklearn023 --posture-conda-env deepposture
+# python scripts/batch_pipeline.py --batch-file batches/batch_1.txt --model CHAP_ALL_ADULTS --sleep-conda-env sklearn023 --posture-conda-env deepposture --sleep-tmp-dir data/tmp --download

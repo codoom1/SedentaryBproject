@@ -28,10 +28,20 @@ source("R/model_utils.R")
 
 # show the first few rows after arranging to confirm ordering
 ## Load data
+# noslp_data <- readr::read_csv("constants/nosleep_data.csv.gz")
+# colnames(noslp_data)
+# unique(noslp_data$data_quality_level)
+# df_nolog <- noslp_data %>% filter(data_quality_level=="no_log_info")
+# 
+# final_dat <- readr::read_csv("data/project_data/final_data.csv.gz")
+# ff_data<- final_dat %>% filter(ID==62179)
+
 df <- data_load()
 colnames(df)
 unique(df$data_quality_level)
 head(df)
+df_nolog <- df %>% filter(data_quality_level=="no_log_info")
+
 length(unique(df$ID))
 df$data_quality <- ifelse(df$data_quality_level=="header_only","no_flagged_data","flagged_data")
 
@@ -72,8 +82,10 @@ dim(weekend_data)
 
 
 # Prepare data (previous inline code wrapped into function above)
-prep_subset <- prepare_diagG_datasets(weekday_data, weekend_data, n_select = 1000,
+prep_subset <- prepare_diagG_datasets(weekday_data, weekend_data, n_select = 2000,
                                       id_col = "ID", weight_col = "Exam_weight")
+
+
 data_model_weekday <- prep_subset$data_model_weekday
 data_model_weekend <- prep_subset$data_model_weekend
 weights_day <- prep_subset$weights_day
@@ -90,6 +102,9 @@ utils::globalVariables(c("Hour", "Hour_num", "emmean", "asymp.LCL", "asymp.UCL",
                          "LCL","UCL", "age_group", "bmi_cat"))
 
 
+
+####===============Age and BMI as fixed effects============####
+## Fitting the model for percent sedentary by stratifying by age and bmi
 m_weekday_diag <- fit_diag_by_hour(data_model_weekday,weights=weights_day,
                                    extra_fixed = c("age_group","bmi_cat"))
 m_weekend_diag <- fit_diag_by_hour(data_model_weekend, weights=weights_end,
@@ -100,19 +115,6 @@ summary(m_weekend_diag)
 # unlist(getME(m_weekend_diag,"cnms")); length(getME(m_weekend_diag,"theta"))
 
 
-# # EMMs on the response scale (wrapped into helper)
-# overall_weighting_toggle <- "proportional"  # change to "proportional" if desired
-# emm_res   <- compute_emm_hour_quality(m_weekday_diag, m_weekend_diag,
-#                                       emm_spec = "Hour+data_quality_level",
-#                                       type = "response",
-#                                       weighting = overall_weighting_toggle)
-# emm_all   <- emm_res$raw
-# emm_all2  <- emm_res$with_ci
-
-
-# ---------------------------------------------------------------------
-# Example usage:
-# ---------------------------------------------------------------------
 # 1) compute emmeans (Hour + age_group and Hour + bmi_cat automatically)
 emm_res <- compute_emm_hour_quality(m_weekday_diag, m_weekend_diag,
                                     extra_fixed = c("age_group", "bmi_cat"),
@@ -149,6 +151,33 @@ p_all <- plot_emm_by_hour(emm_res,
                           include_overall = FALSE)
 print(p_all)
 
+
+
+
+
+
+
+
+
+
+####==================Quality level assessment========####
+## fit model for quality level
+m_weekday_diag <- fit_diag_by_hour(data_model_weekday,weights=weights_day,
+                                   extra_fixed = "data_quality_level")
+m_weekend_diag <- fit_diag_by_hour(data_model_weekend, weights=weights_end,
+                                   extra_fixed = "data_quality_level")
+
+# # EMMs on the response scale (wrapped into helper)
+
+overall_weighting_toggle <- "proportional"  # change to "proportional" if desired
+emm_res   <- compute_emm_hour_quality(m_weekday_diag, m_weekend_diag,
+                                      emm_spec = "Hour+data_quality_level",
+                                      type = "response",
+                                      weighting = overall_weighting_toggle)
+emm_all   <- emm_res$raw
+emm_all2  <- emm_res$with_ci
+
+
 # Relabel legend entries for data quality levels
 quality_label_map <- c(
   header_only      = "no anomalies",
@@ -163,127 +192,20 @@ quality_label_map <- c(
 #   flagged_data      = "has anomalies"
 # )
 
-emm_all2 <- emm_all2 %>%
+emm_res$with_ci <- emm_res$with_ci %>%
   mutate(
     quality_label = dplyr::recode(.data$data_quality_level, !!!quality_label_map),
     quality_label = factor(quality_label,
                            levels = c("no anomalies","low anomalies","medium anomalies","high anomalies","extreme anomalies"))
   )
 
-# emm_all2 <- emm_all2 %>%
-#   mutate(
-#     quality_label = dplyr::recode(.data$data_quality, !!!quality_label_map),
-#     quality_label = factor(quality_label,
-#                            levels = c("no anomalies","has anomalies"))
-#   )
-# ---------------------------------------------------------------------------
-# Overall (quality-collapsed) EMMs: marginal over data_quality_level
-# This averages over levels (equal weighting by default). For size-weighted
-# marginal means, use emmeans(..., weights = 'proportional').
-# ---------------------------------------------------------------------------
-overall_res  <- compute_emm_hour_quality(m_weekday_diag, m_weekend_diag,
-                                         emm_spec = "Hour", type = "response",
-                                         weighting = overall_weighting_toggle)
-overall_all2 <- overall_res$with_ci %>% mutate(source = "overall_marginal",
-                                               quality_label = "Overall")
-
-# Combine anomaly-level and overall for unified legend
-plot_df_main <- emm_all2
-plot_df_overall <- overall_all2
-
-# Prepare factor levels including Overall at end
-legend_levels <- c(levels(plot_df_main$quality_label), "Overall")
-plot_df_overall$quality_label <- factor(plot_df_overall$quality_label, levels = legend_levels)
-plot_df_main$quality_label    <- factor(plot_df_main$quality_label, levels = legend_levels)
-
-# Define colors and linetypes
-quality_colors <- c(
-  "no anomalies" = "#1b9e77",
-  "low anomalies" = "#d95f02",
-  "medium anomalies" = "#7570b3",
-  "high anomalies" = "#e7298a",
-  "extreme anomalies" = "#66a61e",
-  "Overall" = "#000000"
-)
-quality_linetypes <- c(
-  "no anomalies" = "solid",
-  "low anomalies" = "solid",
-  "medium anomalies" = "solid",
-  "high anomalies" = "solid",
-  "extreme anomalies" = "solid",
-  "Overall" = "dashed"
-)
-
-# # Define colors and linetypes
-# quality_colors <- c(
-#   "no anomalies" = "#1b9e77",
-#   "has anomalies" = "#d95f02",
-#   "Overall" = "#000000"
-# )
-# quality_linetypes <- c(
-#   "no anomalies" = "solid",
-#   "has anomalies" = "solid",
-#   "Overall" = "dashed"
-# )
-
-overall_ci_alpha <- 0.40
-
-p1 <- ggplot() +
-  # anomaly-level ribbons
-  geom_ribbon(data = plot_df_main,
-              aes(x = Hour_num, ymin = LCL, ymax = UCL, fill = quality_label,
-                  group = interaction(quality_label, DayType)),
-              alpha = 0.25, colour = NA) +
-  # overall ribbon (thicker alpha, no outline)
-  geom_ribbon(data = plot_df_overall,
-              aes(x = Hour_num, ymin = LCL, ymax = UCL,
-                  group = interaction(quality_label, DayType)),
-              alpha = overall_ci_alpha, fill = "black", colour = NA) +
-  # anomaly-level lines
-  geom_line(data = plot_df_main,
-            aes(Hour_num, emmean, color = quality_label, linetype = quality_label,
-                group = interaction(quality_label, DayType)), linewidth = 0.7) +
-  geom_point(data = plot_df_main,
-             aes(Hour_num, emmean, color = quality_label,
-                 group = interaction(quality_label, DayType)), size = 1.6) +
-  # overall line & points
-  geom_line(data = plot_df_overall,
-            aes(Hour_num, emmean, color = quality_label, linetype = quality_label,
-                group = interaction(quality_label, DayType)), linewidth = 1.1) +
-  geom_point(data = plot_df_overall,
-             aes(Hour_num, emmean, color = quality_label,
-                 group = interaction(quality_label, DayType)), size = 1.9) +
-  scale_color_manual(values = quality_colors) +
-  scale_linetype_manual(values = quality_linetypes) +
-  scale_fill_manual(values = quality_colors[setdiff(names(quality_colors),"Overall")], guide = "none") +
-  scale_x_continuous(breaks = seq(1, 24, by = 2), limits = c(1, 24)) +
-  labs(x = "Hour", y = "Estimated % sedentary",
-       title = NULL,
-       color = "Anomaly level", linetype = "Anomaly level") +
-  guides(fill = "none") +
-  theme_classic(base_size = 12) +
-  theme(legend.position = "right") +
-  facet_wrap(~DayType)
-
-# Add custom theme adjustments for better readability
-p1<- p1 + theme(
-  strip.background = element_blank(),
-  strip.text = element_text(face = "bold"),
-  plot.title = element_text(hjust = 0.5)
-)
-
-
-
-
-# Save the plot
-anomalies_comp <- p1
-ggsave("results/data_qual_plots/anomalies_comp.png", plot = p1, 
-       width = 10, height = 6, dpi = 300)
-ggsave("results/data_qual_plots/anomalies_comp.pdf", plot = p1, 
-       width = 10, height = 6, dpi = 300)
-
-# Display the plot
-print(p1)
+p_all <- plot_emm_by_hour(emm_res, 
+                          which_table = "with_ci",
+                          overall_line_size = 0.8,
+                          point_size = 1.5,
+                          line_size = .6,
+                          include_overall = FALSE)
+print(p_all)
 
 #### =========Inverstigating anomaly levels in the data=====####
 
@@ -851,23 +773,23 @@ if (!dir.exists("results/modeling")) {
 
 cat("\n == Running the diagonal G model with data_quality_level fixed effect==\n")
 
-# diagG_result <- fit_mixed_hour_models(
-#   df,
-#   model_types = "diagG",            # only diagonal-G random effects
-#   extra_fixed = c("data_quality_level"),  # example additional fixed effects
-#   subset_n_ids = 10000,               # sample 1200 overlapping IDs
-#   subset_sample_seed = 123,          # reproducible sampling
-#   subset_sample_method = "random",   # or "first"
-#   scale_weights = TRUE,              # create & use scaled weights
-#   diagG_use_weights = TRUE,
-#   include_overall_overlay = TRUE,    # add dashed overall curve
-#   overall_weighting = "proportional",# average Hours weighting by cell sizes
-#   overall_line_linetype = "dashed",
-#   overall_line_size = .15,
-#   verbose = TRUE
-# )
-### Save model details(optional)
-# saveRDS(diagG_result, file = "results/models_object/diagG_models.rds")
+diagG_result <- fit_mixed_hour_models(
+  df,
+  model_types = "diagG",            # only diagonal-G random effects
+  extra_fixed = c("data_quality_level"),  # example additional fixed effects
+  subset_n_ids = 10000,               # sample 1200 overlapping IDs
+  subset_sample_seed = 123,          # reproducible sampling
+  subset_sample_method = "random",   # or "first"
+  scale_weights = TRUE,              # create & use scaled weights
+  diagG_use_weights = TRUE,
+  include_overall_overlay = TRUE,    # add dashed overall curve
+  overall_weighting = "proportional",# average Hours weighting by cell sizes
+  overall_line_linetype = "dashed",
+  overall_line_size = .15,
+  verbose = TRUE
+)
+## Save model details(optional)
+saveRDS(diagG_result, file = "results/models_object/diagG_models.rds")
 
 # Access pieces from save model :
 diagG_result <- readRDS(file="results/models_object/diagG_models.rds")

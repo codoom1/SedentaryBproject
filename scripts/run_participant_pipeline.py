@@ -94,10 +94,29 @@ def main():
     parser.add_argument("--raw-dest", default=str(REPO_ROOT / "data" / "raw"), help="Root directory to store extracted raw data (default: data/raw)")
     parser.add_argument("--sleep-output", default=str(REPO_ROOT / "data" / "sleep_predictions"), help="Directory for sleep outputs")
     parser.add_argument("--posture-model", default="CHAP_ALL_ADULTS", help="Model to pass to posture script")
-    parser.add_argument("--skip-incomplete-days-sleep", action="store_true", help="Skip incomplete days when running sleep (if supported)")
-    parser.add_argument("--skip-incomplete-days-posture", action="store_true", help="Skip incomplete days when running posture predictions")
+    parser.add_argument(
+        "--skip-incomplete-days-sleep",
+        action="store_true",
+        help="Sleep: skip any calendar day without a full day of data (start 00:00; end 23:59:xx or next 00:00; 23–25h)"
+    )
+    parser.add_argument(
+        "--skip-incomplete-days-posture",
+        action="store_true",
+        help="Posture: skip day-level CSVs that are not full days (start 00:00; end 23:59:xx or next 00:00; 23–25h)"
+    )
+    parser.add_argument("--sleep-tmp-dir", type=str, default=None, help="Temp directory to use for the sleep step (forwarded as --tmp-dir)")
     parser.add_argument("--sleep-conda-env", type=str, default=None, help="Conda env name to run the sleep step in (e.g., sklearn023). If omitted uses current Python")
     parser.add_argument("--posture-conda-env", type=str, default=None, help="Conda env name to run the posture step in (e.g., deepposture). If omitted uses current Python")
+    parser.add_argument("--sleep-only-dates", nargs='*', default=None, help="Optional list of dates (YYYY-MM-DD) to process for sleep --by-day; useful for debugging a problematic day")
+    parser.add_argument("--sleep-day-chunks", type=int, default=None, help="Override number of chunks per day for sleep (forwarded to --day-chunks)")
+    parser.add_argument("--sleep-chunk-overlap", type=int, default=None, help="Override chunk overlap seconds for sleep (forwarded to --chunk-overlap-seconds)")
+    parser.add_argument("--sleep-debug", action='store_true', help="Enable debug logging for the sleep step (forwards --debug)")
+    parser.add_argument("--sleep-swan-timeout", type=int, default=None, help="Timeout in seconds for each SWaN chunk (forwards --swan-timeout-seconds)")
+    parser.add_argument("--sleep-swan-use-worker", action='store_true', help="Run SWaN first pass via isolated worker with timeout (forwards --swan-use-worker)")
+    parser.add_argument("--sleep-swan-retries", type=int, default=None, help="Number of retry attempts per chunk (forwards --swan-retries)")
+    parser.add_argument("--sleep-swan-retry-timeout", type=int, default=None, help="Timeout seconds for retry attempts (forwards --swan-retry-timeout-seconds)")
+    parser.add_argument("--sleep-max-subdivision-depth", type=int, default=None, help="Maximum depth for recursive chunk subdivision (forwards --max-subdivision-depth)")
+    parser.add_argument("--sleep-min-chunk-minutes", type=int, default=None, help="Minimum chunk duration in minutes before subdivision stops (forwards --min-chunk-minutes)")
     parser.add_argument("--dry-run", action="store_true", help="Dry run: validate commands but do not execute heavy tasks")
 
     args = parser.parse_args()
@@ -120,8 +139,30 @@ def main():
 
     # Build sleep command (optionally run inside a specified conda env)
     base_sleep = [str(SLEEP_SCRIPT), "--participant-id", pid, "--data-dir", str(raw_dest_root / cycle), "--output-dir", args.sleep_output, "--by-day"]
+    if args.sleep_tmp_dir:
+        base_sleep += ["--tmp-dir", args.sleep_tmp_dir]
     if args.skip_incomplete_days_sleep:
         base_sleep.append("--skip-incomplete-days")
+    if args.sleep_only_dates:
+        base_sleep += ["--only-dates"] + args.sleep_only_dates
+    if args.sleep_day_chunks is not None:
+        base_sleep += ["--day-chunks", str(args.sleep_day_chunks)]
+    if args.sleep_chunk_overlap is not None:
+        base_sleep += ["--chunk-overlap-seconds", str(args.sleep_chunk_overlap)]
+    if args.sleep_debug:
+        base_sleep.append("--debug")
+    if args.sleep_swan_timeout is not None:
+        base_sleep += ["--swan-timeout-seconds", str(args.sleep_swan_timeout)]
+    if args.sleep_swan_use_worker:
+        base_sleep.append("--swan-use-worker")
+    if args.sleep_swan_retries is not None:
+        base_sleep += ["--swan-retries", str(args.sleep_swan_retries)]
+    if args.sleep_swan_retry_timeout is not None:
+        base_sleep += ["--swan-retry-timeout-seconds", str(args.sleep_swan_retry_timeout)]
+    if args.sleep_max_subdivision_depth is not None:
+        base_sleep += ["--max-subdivision-depth", str(args.sleep_max_subdivision_depth)]
+    if args.sleep_min_chunk_minutes is not None:
+        base_sleep += ["--min-chunk-minutes", str(args.sleep_min_chunk_minutes)]
     if args.sleep_conda_env:
         sleep_cmd = ["conda", "run", "-n", args.sleep_conda_env, "--no-capture-output", "python"] + base_sleep
     else:
@@ -159,7 +200,19 @@ def main():
 
     # Execute sleep
     logger.info("Running sleep classification for participant %s", pid)
-    run_cmd(sleep_cmd, dry_run=False)
+    try:
+        run_cmd(sleep_cmd, dry_run=False)
+    except subprocess.CalledProcessError as e:
+        if e.returncode == 2 and args.skip_incomplete_days_sleep:
+            # Sleep script signals no complete days when using by-day + skip flag
+            logger.warning(
+                "Participant %s: all days are incomplete per completeness rule (start 00:00; end ~23:59 or next 00:00; 23–25h). Skipping posture and ending this participant run.",
+                pid
+            )
+            # End gracefully so batch processing can move on to the next participant
+            return
+        # Other failures: propagate
+        raise
 
     # Execute posture
     logger.info("Running posture prediction for participant %s", pid)
@@ -179,4 +232,6 @@ if __name__ == '__main__':
 #   --skip-incomplete-days-sleep \
 #   --skip-incomplete-days-posture \
 #   --sleep-conda-env sklearn023 \
-#   --posture-conda-env deepposture
+#   --posture-conda-env deepposture\
+#   --download\
+#   --tmp-dir data/tmp/62161
