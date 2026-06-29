@@ -49,7 +49,8 @@ scripts/CHAP2/
 # Misc caches
 *.cache/
 .cache/
-.Rproj.user
+.Rproj.user/
+*.Rproj
 .RData
 .Rhistory
 .Rprofile
