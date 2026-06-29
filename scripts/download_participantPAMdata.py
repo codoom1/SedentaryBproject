@@ -10,9 +10,61 @@ import tarfile
 import tempfile
 import shutil
 from pathlib import Path
-from urllib.request import urlretrieve
-from typing import Dict, Optional, Union
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from typing import Callable, Dict, Optional, Union
 import re
+
+
+def download_file_with_retries(
+    url: str,
+    dest: str,
+    timeout: int = 120,
+    retries: int = 5,
+    reporthook: Optional[Callable[[int, int, int], None]] = None,
+) -> None:
+    """
+    Download a file with retries and timeout.
+    """
+    session = requests.Session()
+    retry = Retry(total=retries, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+
+    dest_path = Path(dest)
+    last_error = None
+
+    for attempt in range(1, retries + 2):
+        try:
+            if dest_path.exists():
+                dest_path.unlink()
+
+            with session.get(url, stream=True, timeout=timeout) as response:
+                response.raise_for_status()
+                total_size = int(response.headers.get('content-length') or -1)
+                block_size = 8192
+                block_num = 0
+                with open(dest_path, 'wb') as f:
+                    if reporthook is not None:
+                        reporthook(block_num, block_size, total_size)
+                    for chunk in response.iter_content(chunk_size=block_size):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        block_num += 1
+                        if reporthook is not None:
+                            reporthook(block_num, block_size, total_size)
+            return
+        except Exception as e:
+            last_error = e
+            if dest_path.exists():
+                dest_path.unlink()
+            if attempt <= retries:
+                print(f"\nDownload attempt {attempt} failed: {e}. Retrying...", file=sys.stderr)
+
+    raise RuntimeError(f"Download failed for {url}: {last_error}")
 
 
 def download_partfiles(
@@ -79,26 +131,28 @@ def download_partfiles(
     
     tar_file = dest_path / f"{participant_id}.tar.bz2"
     
-    # Download the file
+    # Download the file with retries
     try:
         if not quiet:
             print(f"Downloading {url}...")
 
-        # reporthook for urlretrieve to show progress
         def _reporthook(blocknum, blocksize, totalsize):
+            downloaded = blocknum * blocksize
             if totalsize <= 0:
-                # totalsize unknown
-                downloaded = blocknum * blocksize
                 sys.stdout.write(f"\rDownloaded {downloaded} bytes")
             else:
-                downloaded = blocknum * blocksize
-                percent = downloaded / totalsize * 100
-                if percent > 100:
-                    percent = 100
+                downloaded = min(downloaded, totalsize)
+                percent = min(100.0, downloaded / totalsize * 100.0)
                 sys.stdout.write(f"\rDownloading: {percent:5.1f}% ({downloaded}/{totalsize} bytes)")
             sys.stdout.flush()
 
-        urlretrieve(url, tar_file, reporthook=_reporthook)
+        download_file_with_retries(
+            url,
+            tar_file,
+            timeout=120,
+            retries=5,
+            reporthook=None if quiet else _reporthook,
+        )
         if not quiet:
             print()  # newline after progress
     except Exception as e:
@@ -394,7 +448,6 @@ def download_participant_archive_only(
         if not quiet:
             print(f"Downloading {url} to {archive_path} ...")
 
-        # Progress hook for urlretrieve
         def _format_bytes(num: int) -> str:
             size = float(num)
             for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
@@ -417,7 +470,13 @@ def download_participant_archive_only(
                 sys.stdout.write(f"\rDownloaded {_format_bytes(downloaded)}")
             sys.stdout.flush()
 
-        urlretrieve(url, archive_path, reporthook=_reporthook)
+        download_file_with_retries(
+            url,
+            archive_path,
+            timeout=300,
+            retries=5,
+            reporthook=None if quiet else _reporthook,
+        )
         if not quiet:
             print()  # newline after progress line
     except Exception as e:
@@ -547,5 +606,3 @@ if __name__ == "__main__":
         print('Example: python download_participantPAMdata.py 62161 "2011-12" data/raw --extract --remove-archive')
         print("\nOr import and use the functions in your own script:")
         print("  from download_participantPAMdata import download_participant_archive_only, download_partfiles, batch_download_logs")
-
-

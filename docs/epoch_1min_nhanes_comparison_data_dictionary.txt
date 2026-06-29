@@ -1,0 +1,75 @@
+One-Minute CHAP/SWaN and NHANES PAXMIN Dataset
+==============================================
+
+Output layout
+-------------
+model=<MODEL>/Dataset=<CYCLE>/ID=<SEQN>/Day=<YYYY-MM-DD>/part-0.parquet
+
+Each complete participant-day contains 1,440 rows. minute_index ranges from
+0 through 1439.
+
+CHAP columns
+------------
+chap_sitting_10s_epochs
+    Number of the six 10-second epochs classified as sitting.
+chap_sitting_seconds
+    Sitting seconds in the minute.
+chap_sitting_fraction
+    Fraction of available 10-second epochs classified as sitting.
+chap_sitting_majority
+    TRUE when at least three of six epochs are sitting.
+chap_sitting_any
+    TRUE when any 10-second epoch is sitting.
+chap_sitting_full_minute
+    TRUE when all six epochs are sitting.
+prob_sitting_mean
+    Mean CHAP sitting probability over the minute.
+
+SWaN columns
+------------
+swan_state_first_30s, swan_state_second_30s
+    Native SWaN states for each half-minute: 0=wear, 1=sleep, 2=nonwear,
+    -1=missing.
+swan_transition
+    TRUE when the two native 30-second states differ.
+swan_state_1min
+    Common state when both halves agree; -2=mixed/transition, -1=missing.
+swan_wear_10s_epochs, swan_sleep_10s_epochs, swan_nonwear_10s_epochs
+    Counts of aligned 10-second epochs in each SWaN state.
+swan_waking_1min
+    TRUE when swan_state_1min is wear.
+waking_sedentary_1min
+    TRUE when the minute is SWaN wear and CHAP sitting-majority.
+prob_wear_mean, prob_sleep_mean, prob_nonwear_mean
+    Mean SWaN probabilities over the minute.
+
+NHANES columns
+--------------
+nhanes_wear_day
+    PAXDAYM wear-day number matched to the synthetic calendar date.
+nhanes_state_raw
+    Original PAXPREDM code: 1=wake wear, 2=sleep wear, 3=nonwear, 4=unknown.
+nhanes_state
+    Harmonized code: 0=wear, 1=sleep, 2=nonwear, 3=unknown, -1=missing.
+nhanes_transition
+    Original PAXTRANM flag indicating different states in the two underlying
+    30-second windows.
+nhanes_seconds_with_data
+    PAXTSM.
+nhanes_idle_sleep_samples
+    PAXAISMM.
+nhanes_mims_triaxial, nhanes_mims_x, nhanes_mims_y, nhanes_mims_z
+    Released NHANES minute-level MIMS measures.
+nhanes_quality_flag_count, nhanes_quality_flags
+    PAXQFM and PAXFLGSM quality information.
+nhanes_match
+    TRUE when a PAXMIN row matched the CHAP/SWaN minute.
+nhanes_alignment_status
+    Audit label describing wear-day/date alignment.
+
+Comparison columns
+------------------
+swan_nhanes_comparable
+    TRUE when both sources have a non-transition wear/sleep/nonwear state.
+swan_nhanes_state_agree
+    TRUE when comparable SWaN and NHANES harmonized states agree.

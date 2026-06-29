@@ -41,8 +41,10 @@ notebooks/
 
 # Posture library large artifacts (do not commit large/binary model files)
 scripts/posture_library/MSSE-2021/pre-trained-models-pt/
+scripts/posture_library/MSSE-2021/pre-trained-models-rtorch/
 scripts/posture_library/MSSE-2021/tf2PtConversion/
 scripts/posture_library/MSSE-2021/example/
+scripts/CHAP2/
 
 # Misc caches
 *.cache/

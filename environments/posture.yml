@@ -8,6 +8,7 @@ dependencies:
   - scikit-learn=1.5.2
   - numpy
   - pandas
+  - pyarrow
   - scipyS
   - h5py
   - tqdmS

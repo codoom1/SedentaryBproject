@@ -1,0 +1,318 @@
+10-Second Sedentary Dataset and Summary Data Dictionary
+=======================================================
+
+Overview
+--------
+The workflow produces three related datasets:
+
+1. Raw 10-second data: one row per CHAP 10-second epoch.
+2. Participant-day summaries: one row per participant-day.
+3. Participant-level summaries: one row per participant, averaging available
+   participant-day measures.
+
+CHAP sitting status is available every 10 seconds. SWaN sleep/wear status is
+natively predicted every 30 seconds and repeated across the three matching
+10-second CHAP epochs.
+
+
+Partition Columns
+-----------------
+These identifiers are stored in the Parquet directory path and automatically
+recovered when reading the dataset with Hive partitioning.
+
+model
+    Posture model used to classify sitting, such as CHAP.
+
+Dataset
+    NHANES survey cycle, such as 2011-2012 or 2013-2014.
+
+ID
+    Participant identifier.
+
+Day
+    Calendar date represented by the participant-day file.
+
+
+Raw 10-Second Dataset Columns
+-----------------------------
+epoch_index
+    Position of the 10-second epoch within the calendar day.
+    Epoch 0 begins at 00:00:00, epoch 1 begins at 00:00:10, and a complete
+    24-hour day can contain epoch indices 0 through 8639.
+
+sitting
+    Boolean CHAP classification.
+    TRUE means CHAP classified the epoch as sitting.
+    FALSE means CHAP classified the epoch as not sitting.
+
+sleep_state
+    Discrete SWaN classification aligned to the 10-second CHAP epoch.
+
+    0  = WEAR/waking
+    1  = SLEEP
+    2  = NON-WEAR
+    -1 = missing SWaN match
+
+valid_sleep
+    TRUE when a valid SWaN classification matched the CHAP epoch.
+    FALSE when the SWaN classification is missing.
+
+waking
+    TRUE when valid_sleep is TRUE and sleep_state is 0 (WEAR/waking).
+
+sleep_nonwear
+    TRUE when sleep_state is SLEEP or NON-WEAR.
+
+prob_sitting
+    CHAP wrist-model probability that the 10-second epoch is sitting.
+    Stored as float32 when posture probability export is enabled.
+
+prob_wear
+    SWaN probability of WEAR/waking for the native 30-second window.
+    This value is repeated across three matching 10-second epochs.
+
+prob_sleep
+    SWaN probability of SLEEP for the native 30-second window.
+
+prob_nonwear
+    SWaN probability of NON-WEAR for the native 30-second window.
+
+
+Participant-Day Identification and Quality Columns
+--------------------------------------------------
+DayType
+    Weekday or Weekend based on the calendar date.
+
+n_epochs
+    Number of available 10-second CHAP epochs in the participant-day.
+
+recorded_hours
+    Total available CHAP recording time:
+
+    n_epochs * 10 / 3600
+
+first_epoch_index
+    First available 10-second epoch index in the day.
+
+last_epoch_index
+    Last available 10-second epoch index in the day.
+
+n_epoch_gaps
+    Number of discontinuities where consecutive available epoch indices differ
+    by more than one. Bouts do not continue across these gaps.
+
+analysis_epoch_seconds
+    Duration of each CHAP analysis epoch. Currently 10 seconds.
+
+swan_native_epoch_seconds
+    Native duration of each SWaN prediction window. Currently 30 seconds.
+
+
+Participant-Day Epoch Count Columns
+-----------------------------------
+valid_sleep_epochs
+    Number of epochs with a valid matched SWaN state.
+
+missing_sleep_epochs
+    Number of epochs without a valid matched SWaN state.
+
+sitting_epochs
+    Number of all CHAP epochs classified as sitting, regardless of SWaN state.
+
+not_sitting_epochs
+    Number of all CHAP epochs classified as not sitting.
+
+wear_sitting_epochs
+    Number of epochs classified by CHAP as sitting and by SWaN as WEAR/waking.
+
+wear_not_sitting_epochs
+    Number of epochs classified by CHAP as not sitting and by SWaN as
+    WEAR/waking.
+
+sleep_sitting_epochs
+    Number of epochs classified by CHAP as sitting and by SWaN as SLEEP.
+
+sleep_not_sitting_epochs
+    Number of epochs classified by CHAP as not sitting and by SWaN as SLEEP.
+
+nonwear_sitting_epochs
+    Number of epochs classified by CHAP as sitting and by SWaN as NON-WEAR.
+
+nonwear_not_sitting_epochs
+    Number of epochs classified by CHAP as not sitting and by SWaN as
+    NON-WEAR.
+
+missing_sitting_epochs
+    Number of CHAP sitting epochs without a valid SWaN match.
+
+missing_not_sitting_epochs
+    Number of CHAP not-sitting epochs without a valid SWaN match.
+
+
+Participant-Day Hour Columns
+----------------------------
+Every count column ending in "_epochs" has a corresponding "_hours" column:
+
+    hours = epochs * 10 / 3600
+
+Examples:
+
+valid_sleep_hours
+missing_sleep_hours
+sitting_hours
+not_sitting_hours
+wear_sitting_hours
+wear_not_sitting_hours
+sleep_sitting_hours
+sleep_not_sitting_hours
+nonwear_sitting_hours
+nonwear_not_sitting_hours
+missing_sitting_hours
+missing_not_sitting_hours
+
+all_sitting_hours
+    Total CHAP sitting hours regardless of SWaN sleep/wear state.
+    This equals sitting_hours.
+
+waking_sedentary_hours
+    Hours classified as both CHAP sitting and SWaN WEAR/waking.
+    This equals wear_sitting_hours.
+
+waking_hours
+    Total SWaN WEAR/waking hours:
+
+    wear_sitting_hours + wear_not_sitting_hours
+
+sleep_hours
+    Total SWaN SLEEP hours:
+
+    sleep_sitting_hours + sleep_not_sitting_hours
+
+nonwear_hours
+    Total SWaN NON-WEAR hours:
+
+    nonwear_sitting_hours + nonwear_not_sitting_hours
+
+waking_sedentary_percent
+    Percent of waking time classified as sitting:
+
+    100 * waking_sedentary_hours / waking_hours
+
+
+Sedentary Bout Definitions and Columns
+--------------------------------------
+A waking sedentary bout is a continuous sequence of consecutive 10-second
+epochs satisfying both:
+
+    sitting == TRUE
+    valid_sleep == TRUE and sleep_state == 0
+
+Sleep, non-wear, missing SWaN states, and missing epoch indices terminate a
+bout. They do not count as breaks in sitting.
+
+number_sedentary_bouts
+    Number of distinct waking sedentary bouts during the participant-day.
+
+mean_bout_duration_minutes
+    Mean duration of the day's waking sedentary bouts.
+
+median_bout_duration_minutes
+    Median duration of the day's waking sedentary bouts.
+
+maximum_bout_duration_minutes
+    Duration of the longest waking sedentary bout during the day.
+
+sedentary_hours_in_bouts_ge_10min
+sedentary_hours_in_bouts_ge_20min
+sedentary_hours_in_bouts_ge_30min
+sedentary_hours_in_bouts_ge_60min
+    Waking sedentary hours accumulated in bouts lasting at least the indicated
+    duration.
+
+percent_sedentary_time_in_bouts_ge_10min
+percent_sedentary_time_in_bouts_ge_20min
+percent_sedentary_time_in_bouts_ge_30min
+percent_sedentary_time_in_bouts_ge_60min
+    Percent of total waking sedentary time accumulated in bouts lasting at
+    least the indicated duration.
+
+
+Break-in-Sitting Columns
+------------------------
+A break in sitting requires an immediate consecutive transition from:
+
+    waking sitting -> waking not sitting
+
+A transition into sleep, non-wear, missing SWaN, or a missing epoch ends the
+bout but is not counted as a break.
+
+number_breaks
+    Number of immediate waking sitting-to-not-sitting transitions.
+
+breaks_per_sedentary_hour
+    Number of breaks divided by waking_sedentary_hours.
+
+breaks_per_waking_hour
+    Number of breaks divided by waking_hours.
+
+sustained_breaks_ge_30sec
+sustained_breaks_ge_60sec
+sustained_breaks_ge_120sec
+    Number of breaks followed by a continuous waking not-sitting period lasting
+    at least the indicated duration.
+
+
+Participant-Level Summary Columns
+---------------------------------
+valid_days
+    Number of participant-day summary rows currently available.
+
+weekday_days
+    Number of available weekday participant-days.
+
+weekend_days
+    Number of available weekend participant-days.
+
+first_day
+    Earliest available participant-day.
+
+last_day
+    Latest available participant-day.
+
+mean_<participant-day column>
+    Mean of the named participant-day measure across all currently available
+    days for the participant.
+
+Examples:
+
+mean_waking_sedentary_hours
+    Mean daily waking sedentary hours across available days.
+
+mean_number_sedentary_bouts
+    Mean daily number of waking sedentary bouts.
+
+mean_number_breaks
+    Mean daily number of breaks in sitting.
+
+mean_maximum_bout_duration_minutes
+    Mean of each day's maximum sedentary bout duration.
+
+mean_percent_sedentary_time_in_bouts_ge_30min
+    Mean daily percent of waking sedentary time accumulated in bouts lasting at
+    least 30 minutes.
+
+
+Interpretation Notes
+--------------------
+1. Waking sedentary hours use SWaN's discrete WEAR classification directly.
+
+2. This differs from the manuscript workflow that applies a calibrated
+   sleep/non-wear percentage cutoff at a coarser analysis epoch.
+
+3. Although bouts are evaluated on a 10-second CHAP grid, sleep/wake boundaries
+   have 30-second precision because SWaN predictions are native 30-second
+   windows.
+
+4. Participant-level summaries are updated as additional participant-days
+   become available. Run the summary refresh again after production finishes
+   to create final participant-level values.

@@ -37,8 +37,8 @@ import torch
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def generate_predictions(pre_processed_data_dir, output_dir, model, segment, output_label, label_map, downsample_window, bi_lstm_window_sizes, cnn_window_size,
-    gt3x_frequency, amp_factor, num_classes, model_ckpt_path, silent, batch_size, padding="drop"):
+def generate_predictions(pre_processed_data_dir, output_dir, model, segment, output_label, output_probability, label_map, downsample_window, bi_lstm_window_sizes, cnn_window_size,
+    gt3x_frequency, amp_factor, num_classes, model_ckpt_path, silent, batch_size, padding="wrap"):
     """
     Function to generate the activity predictions for pre-precessed data. Predictions will be written out to the given
     output_dir. Predicted value will be one of 0: sedentary or 1: non-sedentary.
@@ -47,6 +47,7 @@ def generate_predictions(pre_processed_data_dir, output_dir, model, segment, out
     :param model: Which model to use. Avaialble options: 'CHAP,' 'CHAP_A', 'CHAP_B', 'CHAP_C', 'CHAP_ALL_ADULTS', and 'CHAP_CHILDREN' (default: 'CHAP_ALL_ADULTS').
     :param segment: Whether to output the segment number.
     :param output_label: Whether to output the actual label.
+    :param output_probability: Whether to output prediction probabilities.
     :param label_map: Human readable label name map for predicted index.
     :param downsample_window: Downsample window size for GT3X data.
     :param bi_lstm_window_sizes: BiLSTM window sizes in minutes.
@@ -96,6 +97,8 @@ def generate_predictions(pre_processed_data_dir, output_dir, model, segment, out
             fout.write('timestamp')
             if output_label:
                 fout.write(',label')
+            if output_probability:
+                fout.write(',probability')
     
             fout.write(',prediction\n')
 
@@ -146,6 +149,7 @@ def generate_predictions(pre_processed_data_dir, output_dir, model, segment, out
                 )
 
                 preds = []
+                probs = []
                 if test_dataloader != None:
                     with torch.no_grad():
                         for inputs in test_dataloader:
@@ -153,19 +157,24 @@ def generate_predictions(pre_processed_data_dir, output_dir, model, segment, out
                             inputs = inputs.view(-1, int(cnn_window_size * 1.0/downsample_window), 3, 1)
                             inputs = inputs.permute(0, 3, 1, 2)
                             outputs = model(inputs)
-                            pred = torch.sigmoid(outputs)
-                            pred = torch.round(pred)
+                            prob = torch.sigmoid(outputs)
+                            np_probs = prob.cpu().detach().numpy().flatten().tolist()
+                            probs += np_probs
+                            pred = torch.round(prob)
                             np_preds = pred.cpu().detach().numpy().flatten().tolist()
-                            preds+=np_preds
+                            preds += np_preds
                             
                 y_pred = np.array(preds)
+                y_prob = np.array(probs)
 
                 if padding == "wrap" and wrapped:
                     y_pred = np.hstack((y_pred[:-bi_lstm_win_size], y_pred[-border:]))
+                    y_prob = np.hstack((y_prob[:-bi_lstm_win_size], y_prob[-border:]))
                 elif padding == "zero" and zeroed:
                     y_pred = y_pred[:-deficit]
+                    y_prob = y_prob[:-deficit]
 
-                for t, l, pred in zip(timestamps[n], labels[n], y_pred):
+                for idx, (t, l, pred) in enumerate(zip(timestamps[n], labels[n], y_pred)):
                     formatstr = ""
                     if segment:
                         formatstr += "{},{}"
@@ -177,6 +186,10 @@ def generate_predictions(pre_processed_data_dir, output_dir, model, segment, out
                     if output_label:
                         formatstr += ",{}"
                         values.append(label_map[int(l)])    
+
+                    if output_probability:
+                        formatstr += ",{}"
+                        values.append(y_prob[idx])
 
                     formatstr += ",{}\n"
                     values.append(label_map[int(pred)])
@@ -259,6 +272,7 @@ if __name__ == "__main__":
     optional_arguments.add_argument('--predictions-dir', help='Predictions output directory (default: ./predictions)', default='./predictions', required=False) 
     optional_arguments.add_argument('--no-segment', help='Do not output segment number', default=False, required=False, action='store_true')
     optional_arguments.add_argument('--output-label', help='Whether to output the actual label', default=False, required=False, action='store_true')
+    optional_arguments.add_argument('--output-probability', help='Whether to output prediction probabilities', default=False, required=False, action='store_true')
 
     optional_arguments.add_argument('--model-checkpoint-path', help='Path where the custom trained model checkpoint is located', default=None, required=False)
     optional_arguments.add_argument('--cnn-window-size', help='CNN window size of the model in seconds on which the predictions to be made (default: 10).', default=10, type=int, required=False)
@@ -271,7 +285,7 @@ if __name__ == "__main__":
     '--padding',
     type=str,
     help='Padding scheme for the last part of data that does not fill a whole lstm window (default: %(default)s)',
-    default='drop',
+    default='wrap',
     choices=('drop', 'zero', 'wrap')
     )
     optional_arguments.add_argument(
@@ -320,7 +334,8 @@ if __name__ == "__main__":
     else:
         args.model_checkpoint_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'pre-trained-models-pt')
 
-    generate_predictions(args.pre_processed_dir, output_dir=args.predictions_dir, model=args.model, segment=not args.no_segment, output_label=args.output_label,
+    generate_predictions(args.pre_processed_dir, output_dir=args.predictions_dir, model=args.model, segment=not args.no_segment,
+        output_label=args.output_label, output_probability=args.output_probability,
         label_map=label_map, downsample_window=1.0/args.down_sample_frequency, bi_lstm_window_sizes=bi_lstm_window_sizes,
         cnn_window_size=args.cnn_window_size, gt3x_frequency=args.gt3x_frequency, amp_factor = args.amp_factor, num_classes = args.num_classes,
         model_ckpt_path=args.model_checkpoint_path, silent = args.silent, batch_size = args.batch_size, padding=args.padding,)

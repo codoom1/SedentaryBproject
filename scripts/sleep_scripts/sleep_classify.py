@@ -54,6 +54,8 @@ import json
 import glob
 import tempfile
 import shutil
+import signal
+from contextlib import contextmanager
 
 # Try to import SWaN_accel
 try:
@@ -69,6 +71,35 @@ except ImportError:
 logger = logging.getLogger(__name__)
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+
+
+class SwanTimeoutError(TimeoutError):
+    """Raised when an in-process SWaN call exceeds the requested timeout."""
+
+
+@contextmanager
+def swan_alarm_timeout(timeout_seconds):
+    """Best-effort timeout for in-process SWaN calls.
+
+    This avoids worker overhead for normal cases. A subprocess worker is still
+    needed for hard-kill protection when a library call cannot be interrupted.
+    """
+    if not timeout_seconds or timeout_seconds <= 0:
+        yield
+        return
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def _handle_timeout(signum, frame):
+        raise SwanTimeoutError(f"SWaN call timed out after {timeout_seconds} seconds")
+
+    signal.signal(signal.SIGALRM, _handle_timeout)
+    signal.setitimer(signal.ITIMER_REAL, float(timeout_seconds))
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def load_raw_sensor_data(participant_dir):
@@ -553,6 +584,11 @@ def main():
         help='Run SWaN first-pass in an isolated subprocess worker with timeout enforcement'
     )
     parser.add_argument(
+        '--swan-worker-fallback',
+        action='store_true',
+        help='Run SWaN in-process first; if it times out, retry that chunk in an isolated worker'
+    )
+    parser.add_argument(
         '--swan-retries',
         type=int,
         default=5,
@@ -794,10 +830,12 @@ def main():
                             
                             # Try processing this chunk with retries
                             attempts = max(1, int(args.swan_retries))
+                            worker_after_timeout = False
                             for attempt in range(1, attempts + 1):
                                 try:
                                     seg_part_id = f"{proc_part_id}_{chunk_label}_d{depth}"
-                                    if args.swan_use_worker:
+                                    run_worker = args.swan_use_worker or worker_after_timeout
+                                    if run_worker:
                                         import subprocess as _sp
                                         worker_in = Path(tmpd) / f"{seg_part_id}_a{attempt}_worker_in.csv"
                                         worker_out = Path(tmpd) / f"{seg_part_id}_a{attempt}_swan_first_pass_raw.csv"
@@ -820,12 +858,46 @@ def main():
                                         if 'HEADER_TIME_STAMP' in seg_res.columns:
                                             seg_res = seg_res.rename({'HEADER_TIME_STAMP': 'START_TIME'}, axis=1)
                                     else:
-                                        seg_res = run_swan_first_pass(
-                                            chunk_df,
-                                            sampling_rate=sampling_rate,
-                                            output_dir=tmpd,
-                                            participant_id=seg_part_id
-                                        )
+                                        timeout_s = int(args.swan_timeout_seconds)
+                                        if attempt > 1 and args.swan_retry_timeout_seconds:
+                                            timeout_s = int(args.swan_retry_timeout_seconds)
+                                        try:
+                                            with swan_alarm_timeout(timeout_s):
+                                                seg_res = run_swan_first_pass(
+                                                    chunk_df,
+                                                    sampling_rate=sampling_rate,
+                                                    output_dir=tmpd,
+                                                    participant_id=seg_part_id
+                                                )
+                                        except SwanTimeoutError:
+                                            if not args.swan_worker_fallback:
+                                                raise
+                                            worker_after_timeout = True
+                                            logger.warning(
+                                                "[subdivision] %s chunk %s depth=%d: normal SWaN timed out on attempt %d; retrying this chunk in worker",
+                                                date_str,
+                                                chunk_label,
+                                                depth,
+                                                attempt,
+                                            )
+                                            import subprocess as _sp
+                                            worker_in = Path(tmpd) / f"{seg_part_id}_a{attempt}_fallback_worker_in.csv"
+                                            worker_out = Path(tmpd) / f"{seg_part_id}_a{attempt}_fallback_swan_first_pass_raw.csv"
+                                            _wdf = chunk_df.rename(columns={
+                                                'timestamp': 'HEADER_TIME_STAMP',
+                                                'X': 'X_ACCELERATION_METERS_PER_SECOND_SQUARED',
+                                                'Y': 'Y_ACCELERATION_METERS_PER_SECOND_SQUARED',
+                                                'Z': 'Z_ACCELERATION_METERS_PER_SECOND_SQUARED'
+                                            }).copy()
+                                            _wdf['HEADER_TIME_STAMP'] = pd.to_datetime(_wdf['HEADER_TIME_STAMP'], errors='coerce')
+                                            _wdf = _wdf.dropna(subset=['HEADER_TIME_STAMP'])
+                                            _wdf.to_csv(worker_in, index=False)
+                                            worker_script = Path(__file__).with_name('swan_worker.py')
+                                            cmd = [sys.executable, str(worker_script), '--input', str(worker_in), '--output', str(worker_out), '--sampling-rate', str(sampling_rate)]
+                                            _sp.run(cmd, check=True, timeout=max(30, timeout_s))
+                                            seg_res = pd.read_csv(worker_out)
+                                            if 'HEADER_TIME_STAMP' in seg_res.columns:
+                                                seg_res = seg_res.rename({'HEADER_TIME_STAMP': 'START_TIME'}, axis=1)
                                     # Success! Return results
                                     logger.info("[subdivision] %s chunk %s depth=%d: SUCCESS on attempt %d/%d (%d windows)",
                                                 date_str, chunk_label, depth, attempt, attempts, len(seg_res))
@@ -952,9 +1024,17 @@ def main():
                 swan_trim = swan_result[(swan_result['START_TIME'] >= day_start) & (swan_result['START_TIME'] < day_end)].copy()
                 # Remove duplicate rows (default keeps first)
                 swan_trim = swan_trim.drop_duplicates()
+                if 'STATE' not in swan_trim.columns and 'PREDICTED' in swan_trim.columns:
+                    prediction_map = {0: 'WEAR', 1: 'SLEEP', 2: 'NON-WEAR'}
+                    swan_trim['STATE'] = pd.to_numeric(
+                        swan_trim['PREDICTED'], errors='coerce'
+                    ).map(prediction_map)
 
                 pred_file = preds_dir / f"{date_str}_sleep_predictions.csv"
                 summary_file = sums_dir / f"{date_str}_sleep_summary.json"
+                # Ensure directories exist before saving (defensive check)
+                preds_dir.mkdir(parents=True, exist_ok=True)
+                sums_dir.mkdir(parents=True, exist_ok=True)
                 swan_trim.to_csv(pred_file, index=False)
 
                 # Build summary

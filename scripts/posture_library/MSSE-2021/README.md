@@ -161,7 +161,7 @@ Complete usage details of this script are as follows:
     --silent              Whether to hide info messages
     --padding {drop,zero,wrap}
                         Padding scheme for the last part of data that does not
-                        fill a whole lstm window (default: drop)
+                        fill a whole lstm window (default: wrap)
     --batch-size BATCH_SIZE
                             Inference batch size (default: 16)
     --amp-factor AMP_FACTOR
@@ -328,7 +328,7 @@ Complete usage details of `make_predictions.py` script with all overiding config
       --silent              Whether to hide info messages
       --padding {drop,zero,wrap}
                             Padding scheme for the last part of data that does not
-                            fill a whole lstm window (default: drop)
+                            fill a whole lstm window (default: wrap)
       --batch-size BATCH_SIZE
                             Inference batch size (default: 16)
       --amp-factor AMP_FACTOR

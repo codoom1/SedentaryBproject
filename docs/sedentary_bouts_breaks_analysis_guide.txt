@@ -1,0 +1,976 @@
+Guide: Efficient Analysis of Sedentary Bouts and Breaks in Sitting from 10-Second Epoch Data
+
+Purpose
+-------
+This guide describes how to efficiently study sedentary accumulation patterns using 10-second sitting predictions. The goal is to move beyond total daily sedentary time and examine how sedentary time is accumulated across the day, especially:
+
+1. Sedentary bouts
+2. Breaks in sitting
+3. Sedentary accumulation metrics
+4. Efficient storage and processing strategies for very large 10-second epoch files
+
+This guide assumes that each participant has repeated 10-second epochs with a sitting prediction or sitting probability. Sleep/non-wear has either already been identified or can be merged into the 10-second data so that bout analyses are restricted to waking time.
+
+
+1. Key Concepts
+---------------
+
+1.1 Sedentary bout
+------------------
+A sedentary bout is a continuous uninterrupted period classified as sitting or sedentary.
+
+With 10-second epochs, a sedentary bout is a run of consecutive 10-second epochs classified as sitting.
+
+Example:
+
+Epoch sequence:
+Sitting, Sitting, Sitting, Not sitting, Sitting, Sitting
+
+This contains two sedentary bouts:
+- Bout 1: 3 epochs = 30 seconds
+- Bout 2: 2 epochs = 20 seconds
+
+If the sitting classification is binary, define:
+- sitting = 1
+- not sitting = 0
+
+A new sedentary bout begins when the current epoch is sitting and the previous epoch is not sitting.
+
+
+1.2 Break in sitting
+--------------------
+A break in sitting occurs when sedentary behavior is interrupted by a non-sitting epoch.
+
+Using 10-second data, a simple definition is:
+- A break occurs when an epoch changes from sitting to not sitting.
+
+Example:
+
+Sitting, Sitting, Sitting, Not sitting, Sitting
+
+The transition from Sitting to Not sitting is one break in sitting.
+
+However, in real accelerometer data, a single 10-second non-sitting epoch may sometimes be noise. Therefore, for sensitivity analyses, breaks can be defined more strictly, such as requiring at least 30 seconds or 60 seconds of continuous non-sitting after a sitting bout.
+
+
+1.3 Posture transitions
+-----------------------
+If the available model only classifies sitting vs not sitting, then full posture transitions cannot be studied. You can only study binary transitions:
+
+- sitting to not sitting
+- not sitting to sitting
+
+Full posture transition analysis would require more detailed labels such as sitting, standing, lying, walking, and other movement states.
+
+For the current sitting/not-sitting framework, it is better to use terms such as:
+- sedentary bout duration
+- interruptions in sitting
+- sit-to-non-sit transitions
+- non-sit-to-sit transitions
+
+Avoid overclaiming full posture transition analysis unless the posture model provides multiple posture classes.
+
+
+2. Why Bout and Break Analyses Matter
+-------------------------------------
+
+Total sedentary time measures the volume of sitting, but it does not describe how sitting is accumulated.
+
+Two participants may both accumulate 11 hours/day of sedentary time, but their patterns may differ substantially:
+
+Participant A:
+- Few long uninterrupted sedentary bouts
+- Low number of breaks
+- Long maximum bout duration
+
+Participant B:
+- Many short sedentary bouts
+- Frequent breaks
+- Lower maximum bout duration
+
+These two patterns may have different implications for cardiometabolic risk, mobility, and intervention design. Therefore, bout and break metrics can provide a more detailed picture of sedentary behavior than total daily sedentary time alone.
+
+
+3. Data Required
+----------------
+
+At minimum, the 10-second epoch dataset should include:
+
+- participant ID
+- day number or date
+- epoch index within day
+- sitting probability or sitting classification
+- waking indicator, or sleep/non-wear indicator
+- optional: survey cycle
+- optional: sample weights and demographic variables for later survey analysis
+
+Recommended minimal columns for bout processing:
+
+participant_id
+cycle
+day
+epoch_index
+sitting_prob
+sitting_class
+sleep_nonwear_class
+waking_class
+
+The most important efficiency principle is to avoid storing unnecessary timestamp strings. Instead of storing full timestamps for every 10-second row, store:
+
+- day
+- epoch_index
+
+Time of day can be reconstructed as:
+
+time_seconds = epoch_index * 10
+hour_of_day = floor(time_seconds / 3600)
+
+
+4. Defining Waking Time Before Bout Analysis
+--------------------------------------------
+
+Sedentary behavior is a waking behavior. Therefore, sedentary bouts and breaks should be calculated only within waking periods.
+
+Recommended approach:
+
+1. Use sleep/non-wear predictions to identify sleep/non-wear analysis epochs.
+2. Mark all 10-second sitting epochs that fall within sleep/non-wear periods as non-waking.
+3. Restrict bout and break analysis to waking epochs only.
+
+This prevents sleep or non-wear periods from being counted as long sedentary bouts.
+
+Important note:
+If waking time is defined at the 1-hour level, then all 10-second epochs inside waking hours can be used for bout analysis. If sleep/non-wear classification is available at 30-second or finer resolution, a finer waking mask may be preferable.
+
+
+5. Choosing a Sitting Threshold
+-------------------------------
+
+If the model outputs probabilities, you need to convert sitting probability to a binary sitting/not-sitting class.
+
+Common approach:
+
+sitting_class = 1 if sitting_prob >= 0.5
+sitting_class = 0 otherwise
+
+However, the threshold can affect bout and break estimates. A higher threshold produces fewer sitting epochs and shorter bouts. A lower threshold produces more sitting epochs and longer bouts.
+
+Recommended approach:
+
+Primary analysis:
+- Use the validated or default threshold from the posture model, if available.
+
+Sensitivity analyses:
+- Compare results using thresholds such as 0.4, 0.5, and 0.6.
+
+Report whether key conclusions are stable across reasonable thresholds.
+
+
+6. Core Bout Metrics
+--------------------
+
+For each participant-day, useful sedentary bout metrics include:
+
+6.1 Total sedentary time
+------------------------
+Total sitting duration across all waking epochs.
+
+Formula:
+
+total_sedentary_minutes = number_of_sitting_epochs * 10 / 60
+
+
+6.2 Number of sedentary bouts
+-----------------------------
+Total number of uninterrupted sitting periods during waking time.
+
+A new bout begins when:
+
+current epoch = sitting
+previous waking epoch = not sitting
+
+
+6.3 Mean bout duration
+----------------------
+Average duration of sedentary bouts.
+
+Formula:
+
+mean_bout_duration_minutes = total_sedentary_minutes / number_of_bouts
+
+
+6.4 Median bout duration
+------------------------
+Median duration across all sedentary bouts for a participant-day.
+
+This is often more stable than the mean because bout duration can be highly skewed.
+
+
+6.5 Maximum bout duration
+-------------------------
+Longest uninterrupted sedentary bout in a participant-day.
+
+This is useful for identifying prolonged sitting exposure.
+
+
+6.6 Percent of sedentary time in long bouts
+-------------------------------------------
+Calculate the proportion of total sedentary time accumulated in bouts exceeding a chosen duration.
+
+Common thresholds:
+
+- bouts >= 10 minutes
+- bouts >= 20 minutes
+- bouts >= 30 minutes
+- bouts >= 60 minutes
+
+Example formula:
+
+percent_sedentary_time_in_30min_bouts =
+  100 * sedentary_minutes_in_bouts_ge_30min / total_sedentary_minutes
+
+
+6.7 Fragmentation metrics
+-------------------------
+Fragmentation describes whether sedentary time is accumulated in many short bouts or fewer long bouts.
+
+Simple fragmentation metrics include:
+
+- number of bouts per sedentary hour
+- number of breaks per sedentary hour
+- mean bout duration
+- median bout duration
+- alpha or Gini-based sedentary accumulation indices, if more advanced analysis is desired
+
+For most papers, start with interpretable measures:
+
+- total sedentary time
+- number of bouts
+- mean or median bout duration
+- longest bout
+- breaks per sedentary hour
+- percent sedentary time in bouts >= 30 minutes
+
+
+7. Core Break Metrics
+---------------------
+
+7.1 Number of breaks in sitting
+-------------------------------
+A simple break is a transition from sitting to not sitting.
+
+Definition:
+
+break = 1 if previous epoch is sitting and current epoch is not sitting
+
+Summarize per participant-day:
+
+breaks_per_day = sum(break indicators)
+
+
+7.2 Breaks per sedentary hour
+-----------------------------
+This standardizes the number of breaks by the amount of sedentary time.
+
+Formula:
+
+breaks_per_sedentary_hour = breaks_per_day / total_sedentary_hours
+
+This is useful because someone with more total sitting time has more opportunity to have breaks.
+
+
+7.3 Breaks per waking hour
+--------------------------
+This standardizes breaks by waking duration.
+
+Formula:
+
+breaks_per_waking_hour = breaks_per_day / waking_hours
+
+
+7.4 Sustained breaks
+--------------------
+A sustained break requires that the non-sitting period lasts for a minimum duration.
+
+Possible definitions:
+
+- at least 30 seconds of non-sitting
+- at least 60 seconds of non-sitting
+- at least 2 minutes of non-sitting
+
+This can reduce sensitivity to isolated misclassified 10-second epochs.
+
+Recommended sensitivity analysis:
+
+Primary:
+- break = any sitting-to-not-sitting transition
+
+Sensitivity:
+- sustained break = sitting-to-not-sitting transition followed by at least 30 seconds of continuous non-sitting
+
+
+8. Efficient File Format
+------------------------
+
+For 14,534 participants, 7 days, and 10-second epochs, the full dataset could approach:
+
+14,534 participants * 7 days * 8,640 epochs/day = 879,016,320 rows
+
+This is too large for ordinary CSV workflows.
+
+Recommended format:
+
+Partitioned Parquet with Zstandard compression.
+
+Why Parquet:
+
+- much smaller than CSV
+- fast column-based reading
+- compatible with Python, R, DuckDB, Spark, and Arrow
+- supports partitioning by cycle, day, or participant group
+- can read only needed columns
+
+Recommended directory structure:
+
+sedentary_10s_parquet/
+  cycle=2011_2012/
+    day=1/
+      part-0001.parquet
+      part-0002.parquet
+    day=2/
+      part-0001.parquet
+  cycle=2013_2014/
+    day=1/
+      part-0001.parquet
+
+If files become too small, partition only by cycle and day. Avoid partitioning by participant ID alone because it may create too many small files.
+
+
+9. Efficient Column Types
+-------------------------
+
+Use compact numeric types:
+
+participant_id: int32 or int64
+cycle: categorical or partition variable
+day: int8 or int16
+epoch_index: int16, because 0 to 8639 fits in int16
+sitting_prob: float32
+sitting_class: bool or int8
+sleep_nonwear_class: bool or int8
+waking_class: bool or int8
+
+Avoid:
+
+- character timestamps for every row
+- repeated long strings
+- unnecessary columns in the bout-processing dataset
+
+If possible, store probabilities as float32, not float64. This can cut probability storage in half.
+
+
+10. Recommended Analysis Strategy
+---------------------------------
+
+Do not try to load the full 10-second dataset into memory.
+
+Instead:
+
+1. Store the full 10-second predictions as partitioned Parquet.
+2. Process one participant-day, one day partition, or one cycle-day partition at a time.
+3. Calculate bout and break summaries at the participant-day level.
+4. Save the much smaller participant-day summary file.
+5. Perform survey-weighted national analyses using the participant-level or participant-day summary file, not the full 10-second data.
+
+Recommended outputs:
+
+A. Participant-day bout summary
+-------------------------------
+One row per participant-day.
+
+Columns:
+
+participant_id
+cycle
+day
+waking_hours
+total_sedentary_hours
+number_of_bouts
+number_of_breaks
+breaks_per_sedentary_hour
+mean_bout_duration_min
+median_bout_duration_min
+max_bout_duration_min
+sedentary_hours_in_bouts_ge_10min
+sedentary_hours_in_bouts_ge_30min
+sedentary_hours_in_bouts_ge_60min
+percent_sedentary_time_in_bouts_ge_30min
+
+B. Participant-level bout summary
+----------------------------------
+Average across valid days.
+
+Columns:
+
+participant_id
+cycle
+valid_days
+mean_waking_hours
+mean_sedentary_hours
+mean_number_of_bouts
+mean_number_of_breaks
+mean_breaks_per_sedentary_hour
+mean_bout_duration_min
+median_bout_duration_min
+mean_max_bout_duration_min
+mean_percent_sedentary_time_in_bouts_ge_30min
+survey_weight
+strata
+psu
+age_group
+gender
+race_ethnicity
+BMI_category
+
+The participant-level file should be the main file used for survey-weighted descriptive analysis.
+
+
+11. Python Implementation Outline
+---------------------------------
+
+The following is conceptual Python code using pandas. For very large files, run this on one partition at a time.
+
+Step 1: Read only needed columns
+
+import pandas as pd
+
+cols = [
+    "participant_id", "cycle", "day", "epoch_index",
+    "sitting_prob", "waking_class"
+]
+
+df = pd.read_parquet("sedentary_10s_parquet/cycle=2011_2012/day=1", columns=cols)
+
+
+Step 2: Create binary sitting class
+
+SITTING_THRESHOLD = 0.5
+
+df["sitting"] = df["sitting_prob"] >= SITTING_THRESHOLD
+
+
+Step 3: Restrict to waking epochs
+
+df = df[df["waking_class"] == True].copy()
+
+
+Step 4: Sort correctly
+
+df = df.sort_values(["participant_id", "day", "epoch_index"])
+
+
+Step 5: Identify new bouts
+
+df["prev_sitting"] = df.groupby(["participant_id", "day"])["sitting"].shift(fill_value=False)
+
+df["new_bout"] = df["sitting"] & (~df["prev_sitting"])
+
+df["bout_id"] = df.groupby(["participant_id", "day"])["new_bout"].cumsum()
+
+
+Step 6: Calculate bout durations
+
+sitting_epochs = df[df["sitting"]].copy()
+
+bout_df = (
+    sitting_epochs
+    .groupby(["participant_id", "cycle", "day", "bout_id"], as_index=False)
+    .agg(n_epochs=("sitting", "size"))
+)
+
+bout_df["bout_duration_min"] = bout_df["n_epochs"] * 10 / 60
+
+
+Step 7: Calculate participant-day bout metrics
+
+bout_summary = (
+    bout_df
+    .groupby(["participant_id", "cycle", "day"], as_index=False)
+    .agg(
+        number_of_bouts=("bout_id", "nunique"),
+        mean_bout_duration_min=("bout_duration_min", "mean"),
+        median_bout_duration_min=("bout_duration_min", "median"),
+        max_bout_duration_min=("bout_duration_min", "max"),
+        sedentary_minutes=("bout_duration_min", "sum"),
+        sedentary_minutes_ge_10min=("bout_duration_min", lambda x: x[x >= 10].sum()),
+        sedentary_minutes_ge_30min=("bout_duration_min", lambda x: x[x >= 30].sum()),
+        sedentary_minutes_ge_60min=("bout_duration_min", lambda x: x[x >= 60].sum())
+    )
+)
+
+bout_summary["total_sedentary_hours"] = bout_summary["sedentary_minutes"] / 60
+bout_summary["percent_sedentary_time_ge_30min"] = (
+    100 * bout_summary["sedentary_minutes_ge_30min"] / bout_summary["sedentary_minutes"]
+)
+
+
+Step 8: Calculate breaks
+
+df["break_in_sitting"] = df["prev_sitting"] & (~df["sitting"])
+
+break_summary = (
+    df
+    .groupby(["participant_id", "cycle", "day"], as_index=False)
+    .agg(
+        number_of_breaks=("break_in_sitting", "sum"),
+        waking_epochs=("sitting", "size")
+    )
+)
+
+break_summary["waking_hours"] = break_summary["waking_epochs"] * 10 / 3600
+
+
+Step 9: Merge bout and break summaries
+
+day_summary = break_summary.merge(
+    bout_summary,
+    on=["participant_id", "cycle", "day"],
+    how="left"
+)
+
+# Participants with no sitting bouts on a day should have zeros for bout metrics.
+zero_cols = [
+    "number_of_bouts", "sedentary_minutes", "total_sedentary_hours",
+    "sedentary_minutes_ge_10min", "sedentary_minutes_ge_30min",
+    "sedentary_minutes_ge_60min", "percent_sedentary_time_ge_30min"
+]
+
+for col in zero_cols:
+    day_summary[col] = day_summary[col].fillna(0)
+
+# Avoid division by zero.
+day_summary["breaks_per_sedentary_hour"] = (
+    day_summary["number_of_breaks"] / day_summary["total_sedentary_hours"].replace(0, pd.NA)
+)
+
+
+Step 10: Save participant-day summaries
+
+day_summary.to_parquet(
+    "participant_day_bout_summary.parquet",
+    compression="zstd",
+    index=False
+)
+
+
+12. R Implementation Outline
+----------------------------
+
+The following is conceptual R code using dplyr and arrow. For very large files, process partition by partition.
+
+library(arrow)
+library(dplyr)
+
+cols <- c(
+  "participant_id", "cycle", "day", "epoch_index",
+  "sitting_prob", "waking_class"
+)
+
+df <- read_parquet(
+  "sedentary_10s_parquet/cycle=2011_2012/day=1/part-0001.parquet",
+  col_select = all_of(cols)
+)
+
+SITTING_THRESHOLD <- 0.5
+
+df <- df %>%
+  mutate(sitting = sitting_prob >= SITTING_THRESHOLD) %>%
+  filter(waking_class == TRUE) %>%
+  arrange(participant_id, day, epoch_index) %>%
+  group_by(participant_id, day) %>%
+  mutate(
+    prev_sitting = lag(sitting, default = FALSE),
+    new_bout = sitting & !prev_sitting,
+    bout_id = cumsum(new_bout),
+    break_in_sitting = prev_sitting & !sitting
+  ) %>%
+  ungroup()
+
+bout_df <- df %>%
+  filter(sitting == TRUE) %>%
+  group_by(participant_id, cycle, day, bout_id) %>%
+  summarise(
+    n_epochs = n(),
+    bout_duration_min = n_epochs * 10 / 60,
+    .groups = "drop"
+  )
+
+bout_summary <- bout_df %>%
+  group_by(participant_id, cycle, day) %>%
+  summarise(
+    number_of_bouts = n(),
+    mean_bout_duration_min = mean(bout_duration_min),
+    median_bout_duration_min = median(bout_duration_min),
+    max_bout_duration_min = max(bout_duration_min),
+    sedentary_minutes = sum(bout_duration_min),
+    sedentary_minutes_ge_10min = sum(bout_duration_min[bout_duration_min >= 10]),
+    sedentary_minutes_ge_30min = sum(bout_duration_min[bout_duration_min >= 30]),
+    sedentary_minutes_ge_60min = sum(bout_duration_min[bout_duration_min >= 60]),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    total_sedentary_hours = sedentary_minutes / 60,
+    percent_sedentary_time_ge_30min =
+      100 * sedentary_minutes_ge_30min / sedentary_minutes
+  )
+
+break_summary <- df %>%
+  group_by(participant_id, cycle, day) %>%
+  summarise(
+    number_of_breaks = sum(break_in_sitting, na.rm = TRUE),
+    waking_epochs = n(),
+    waking_hours = waking_epochs * 10 / 3600,
+    .groups = "drop"
+  )
+
+day_summary <- break_summary %>%
+  left_join(bout_summary, by = c("participant_id", "cycle", "day")) %>%
+  mutate(
+    across(
+      c(number_of_bouts, sedentary_minutes, total_sedentary_hours,
+        sedentary_minutes_ge_10min, sedentary_minutes_ge_30min,
+        sedentary_minutes_ge_60min),
+      ~replace_na(.x, 0)
+    ),
+    breaks_per_sedentary_hour = number_of_breaks / total_sedentary_hours
+  )
+
+write_parquet(
+  day_summary,
+  "participant_day_bout_summary.parquet",
+  compression = "zstd"
+)
+
+
+13. Handling Gaps and Missing Epochs
+------------------------------------
+
+Bout analyses are sensitive to gaps in the epoch sequence.
+
+Before identifying bouts, check whether epochs are consecutive within participant-day.
+
+Expected:
+
+current epoch_index - previous epoch_index = 1
+
+If there is a gap, do not allow a sedentary bout to continue across the gap.
+
+A new bout should begin after a gap if the current epoch is sitting.
+
+Improved logic:
+
+new_bout = sitting and (
+  previous epoch is not sitting OR
+  previous epoch is missing OR
+  epoch_index - previous_epoch_index > 1
+)
+
+Similarly, breaks should only be counted when epochs are consecutive unless you decide otherwise.
+
+
+14. Handling Sleep/Wake Boundaries
+----------------------------------
+
+Do not allow sedentary bouts to continue across sleep/non-wear periods.
+
+If a participant is sitting before sleep and sitting after waking, these should be separate bouts.
+
+Restricting to waking epochs is not enough if the row sequence has removed sleep epochs and then makes pre-sleep and post-sleep epochs appear adjacent. To avoid this, use epoch_index gaps when identifying new bouts.
+
+If the difference between consecutive epoch_index values is greater than 1, treat this as a break in continuity.
+
+
+15. Recommended Sensitivity Analyses
+------------------------------------
+
+Because bout and break metrics depend on definitions, include sensitivity analyses.
+
+Suggested sensitivity analyses:
+
+1. Sitting probability threshold
+   - 0.4, 0.5, 0.6
+
+2. Break definition
+   - any 10-second non-sitting interruption
+   - at least 30 seconds non-sitting
+   - at least 60 seconds non-sitting
+
+3. Long bout thresholds
+   - >=10 minutes
+   - >=20 minutes
+   - >=30 minutes
+   - >=60 minutes
+
+4. Waking definition
+   - primary sleep/non-wear cutoff
+   - nearby cutoff values, if relevant
+
+Report whether the main subgroup patterns are robust.
+
+
+16. Statistical Analysis After Bout Summaries
+---------------------------------------------
+
+Once participant-day metrics are created, average them within participant across valid days.
+
+Example participant-level variables:
+
+mean_sedentary_hours
+mean_number_of_bouts
+mean_number_of_breaks
+mean_breaks_per_sedentary_hour
+mean_max_bout_duration_min
+mean_percent_sedentary_time_ge_30min
+
+Then merge with NHANES survey design variables:
+
+- recalibrated 4-year examination weight
+- masked variance stratum
+- masked PSU
+- age group
+- gender
+- race/ethnicity
+- BMI category
+
+Use survey-weighted analyses for national estimates.
+
+Potential national estimates:
+
+- mean number of sedentary bouts per day
+- mean number of breaks per sedentary hour
+- mean maximum sedentary bout duration
+- percent of sedentary time accumulated in bouts >=30 minutes
+- subgroup estimates by age, sex, BMI, and race/ethnicity
+
+
+17. Suggested Results Tables
+----------------------------
+
+Table 1: Overall sedentary accumulation metrics
+
+Columns:
+
+Metric
+Mean
+SE
+95% CI
+
+Rows:
+
+Total sedentary time, h/day
+Number of sedentary bouts/day
+Mean bout duration, min
+Median bout duration, min
+Maximum bout duration, min
+Breaks/day
+Breaks per sedentary hour
+Percent sedentary time in bouts >=30 min
+Percent sedentary time in bouts >=60 min
+
+
+Table 2: Sedentary accumulation by age and sex
+
+Rows:
+
+Age group and sex combinations
+
+Columns:
+
+Total sedentary time
+Number of breaks per sedentary hour
+Mean maximum bout duration
+Percent sedentary time in bouts >=30 min
+
+
+Table 3: Sedentary accumulation by BMI and race/ethnicity
+
+Rows:
+
+BMI category by race/ethnicity
+
+Columns:
+
+Total sedentary time
+Breaks per sedentary hour
+Percent sedentary time in bouts >=30 min
+
+
+18. Suggested Figures
+---------------------
+
+Figure 1: Distribution of maximum sedentary bout duration
+
+Figure 2: Percent of sedentary time accumulated in long bouts by age group
+
+Figure 3: Breaks per sedentary hour by age and BMI category
+
+Figure 4: Hourly probability of being in a sedentary bout lasting at least 30 minutes
+
+Figure 5: Heatmap of sedentary accumulation by hour of day and day type
+
+
+19. Recommended Wording for a Methods Section
+---------------------------------------------
+
+Sedentary accumulation patterns were derived from the 10-second sitting predictions among epochs classified as waking time. A sedentary bout was defined as a sequence of consecutive waking 10-second epochs classified as sitting. Bout duration was calculated as the number of consecutive sitting epochs multiplied by 10 seconds. A break in sitting was defined as a transition from sitting to not sitting during waking time. Participant-day summaries included the number of sedentary bouts, total sedentary time, mean and maximum bout duration, number of breaks, breaks per sedentary hour, and the percentage of sedentary time accumulated in bouts lasting at least 30 minutes. These participant-day summaries were averaged across valid days within each participant and analyzed using the NHANES survey design.
+
+
+20. Recommended Wording for a Limitation
+----------------------------------------
+
+This analysis focused on total waking sedentary volume. Future analyses using the 10-second prediction data can examine sedentary accumulation patterns, including the duration of uninterrupted sitting bouts and the frequency of interruptions in sitting. Such analyses may provide additional insight into how sedentary time is distributed across the day and whether prolonged uninterrupted sitting differs across population subgroups.
+
+
+21. Practical Recommendations
+-----------------------------
+
+Best file format:
+- Partitioned Parquet with Zstandard compression
+
+Best processing strategy:
+- Process one partition at a time
+- Create participant-day summaries
+- Do not conduct survey analysis on the full 10-second data
+
+Best primary bout metrics:
+- total sedentary time
+- number of bouts per day
+- maximum bout duration
+- breaks per sedentary hour
+- percent sedentary time in bouts >=30 minutes
+
+Best sensitivity checks:
+- different sitting probability thresholds
+- different break definitions
+- different long-bout thresholds
+
+Most important caution:
+- Do not let bouts continue across sleep/non-wear periods, missing epochs, or day boundaries.
+
+
+22. Implemented 10-Second Input Dataset
+----------------------------------------
+The repository can create the bout-analysis input independently of the
+summary-epoch workflow by running scripts/export_10s_dataset.py directly or
+by passing --export-10s to the participant or batch pipeline.
+
+For a 10-second-only batch run, use --export-10s with --skip-summary. The
+dedicated Unity launcher is:
+
+cluster/run_batch_unity_wrist_sleep_10s_array.sh
+
+The durable dataset is saved as Hive-partitioned participant-day Parquet:
+
+<output-root>/
+  model=CHAP/
+    Dataset=2011-2012/
+      ID=62191/
+        Day=2000-01-09/
+          part-0.parquet
+
+Each file retains the original CHAP epoch positions using epoch_index. It also
+contains sitting, sleep_state, valid_sleep, waking, and sleep_nonwear. Because
+sleep/non-wear rows are retained rather than filtered out, later bout analysis
+can correctly end bouts at sleep/non-wear boundaries and missing epochs.
+
+
+23. Incremental Participant-Day and Participant Summaries
+----------------------------------------------------------
+Use scripts/summarize_10s_dataset.py to create compact descriptive summaries
+while the cluster production array continues adding participant-day files.
+
+The participant-day output contains explicit cross-tabulation columns:
+
+wear_not_sitting_epochs
+wear_sitting_epochs
+sleep_not_sitting_epochs
+sleep_sitting_epochs
+nonwear_not_sitting_epochs
+nonwear_sitting_epochs
+missing_not_sitting_epochs
+missing_sitting_epochs
+
+Equivalent hour columns, waking sedentary hours, waking hours, total sitting
+hours, recorded hours, missing SWaN matches, and epoch-gap checks are also
+included.
+
+Primary output layout:
+
+<summary-root>/
+  participant_day/model=<MODEL>/Dataset=<CYCLE>/ID=<ID>/Day=<DATE>/part-0.parquet
+  participant/model=<MODEL>/Dataset=<CYCLE>/ID=<ID>/part-0.parquet
+
+Parquet should remain the primary saved result. Optional combined compressed
+CSV snapshots are useful for inspection or transfer, but should not be the
+primary incrementally updated storage format.
+
+The script is idempotent:
+
+- Existing day summaries are skipped when their source file is unchanged.
+- New or updated participant-days are summarized.
+- Participant-level summaries are refreshed only for affected participants.
+- Writes are atomic, allowing the script to run while production continues.
+
+On Unity, submit:
+
+cluster/run_epoch_10s_summary_refresh.sh
+
+Submit the refresh periodically during production and once more after all
+10-second production jobs finish.
+
+The incremental summary also implements gap-aware waking sedentary bouts and
+breaks. Waking epochs are defined using the discrete SWaN state:
+
+sleep_state == 0 and valid_sleep == TRUE
+
+CHAP sitting epochs classified by SWaN as sleep, non-wear, or missing are not
+included in waking sedentary bouts. These epochs end an existing bout but do
+not count as a break in sitting.
+
+A break requires an immediate consecutive transition from waking sitting to
+waking not-sitting. Missing epoch indices, sleep, and non-wear terminate
+continuity without creating a break.
+
+Participant-day bout and break outputs include:
+
+number_sedentary_bouts
+number_breaks
+mean_bout_duration_minutes
+median_bout_duration_minutes
+maximum_bout_duration_minutes
+breaks_per_sedentary_hour
+breaks_per_waking_hour
+sedentary_hours_in_bouts_ge_10min
+sedentary_hours_in_bouts_ge_20min
+sedentary_hours_in_bouts_ge_30min
+sedentary_hours_in_bouts_ge_60min
+percent_sedentary_time_in_bouts_ge_10min
+percent_sedentary_time_in_bouts_ge_20min
+percent_sedentary_time_in_bouts_ge_30min
+percent_sedentary_time_in_bouts_ge_60min
+sustained_breaks_ge_30sec
+sustained_breaks_ge_60sec
+sustained_breaks_ge_120sec
+
+Interpretation of resolution:
+
+- CHAP sitting status is available at 10-second resolution.
+- SWaN sleep/wear status is natively predicted in 30-second windows.
+- Each SWaN 30-second state is aligned to three CHAP 10-second epochs.
+- Therefore, bouts are measured on the 10-second CHAP grid, but sleep/wake
+  boundaries have 30-second SWaN resolution.
+
+This analysis uses SWaN's discrete state classification directly. It is a
+different sleep-removal definition from the manuscript's calibrated
+analysis-epoch percentage cutoff and should be described as a separate or
+sensitivity analysis.

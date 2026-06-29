@@ -37,7 +37,7 @@ source("R/model_utils.R")
 # ff_data<- final_dat %>% filter(ID==62179)
 
 df <- data_load()
-colnames(df)
+
 unique(df$data_quality_level)
 head(df)
 df_nolog <- df %>% filter(data_quality_level=="no_log_info")
@@ -61,7 +61,7 @@ splits <- preprocess_sed_data(df,
                               set_hour_treatment = TRUE,
                               split_by_daytype = TRUE)
 ## get all processed data
-all_data     <- splits$all
+all_data<- splits$all
 colnames(all_data)
 
 

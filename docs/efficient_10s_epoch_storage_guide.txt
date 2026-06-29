@@ -1,0 +1,585 @@
+Efficient Storage and Processing Guide for 10-Second NHANES Wrist Accelerometer Predictions
+=========================================================================================
+
+Purpose
+-------
+This guide explains how to efficiently store, organize, and process 10-second epoch-level sitting predictions for NHANES 2011-2014 wrist accelerometer data. The goal is to avoid extremely large and slow CSV workflows and instead use efficient columnar storage, partitioning, and aggregation strategies.
+
+The recommendations are written for a dataset with approximately 14,534 participants, where each participant may have up to 7 days of 24-hour accelerometer data.
+
+
+1. Why the 10-second data can become very large
+-----------------------------------------------
+A 10-second epoch dataset grows very quickly because each participant contributes many rows per day.
+
+A full 24-hour day contains:
+
+    24 hours x 60 minutes/hour x 6 ten-second epochs/minute = 8,640 epochs/day
+
+For 14,534 participants:
+
+    14,534 participants x 8,640 epochs/day = 125,573,760 rows for one full day
+
+For 7 full days:
+
+    14,534 participants x 7 days x 8,640 epochs/day = 879,016,320 rows
+
+Therefore, a complete 10-second prediction dataset can approach 0.9 billion rows.
+
+This is too large for routine CSV-based analysis on many laptops and can also be inefficient on clusters if not stored carefully.
+
+
+2. Recommended file format
+--------------------------
+The best format for the full 10-second epoch prediction dataset is Parquet.
+
+Recommended format:
+
+    Partitioned Parquet dataset with Zstandard compression
+
+Why Parquet is recommended:
+
+    - It is much smaller than plain CSV.
+    - It is faster to read and write.
+    - It is column-based, so you can read only the columns needed for a task.
+    - It works well with Python, R, DuckDB, Arrow, Spark, and HPC workflows.
+    - It preserves data types better than CSV.
+    - It supports partitioned datasets, allowing you to read only selected cycles, days, or participant groups.
+
+Avoid using plain CSV for the full 10-second dataset. CSV is useful for final small tables, but not for the full epoch-level prediction data.
+
+Recommended workflow:
+
+    Full 10-second predictions:       Parquet
+    Aggregated hourly summaries:      Parquet + optional CSV
+    Participant-day summaries:        Parquet + optional CSV
+    Final publication tables:         CSV or Excel/Google Docs table
+
+
+3. Recommended directory structure
+----------------------------------
+A good partitioned structure is:
+
+    chap_10s_predictions_parquet/
+        cycle=2011-2012/
+            day=1/
+                part-0001.parquet
+                part-0002.parquet
+            day=2/
+                part-0001.parquet
+        cycle=2013-2014/
+            day=1/
+                part-0001.parquet
+                part-0002.parquet
+            day=2/
+                part-0001.parquet
+
+This structure makes it easy to read only one cycle or one day at a time.
+
+If day-level partitioning creates too many small files, use only cycle-level partitioning:
+
+    chap_10s_predictions_parquet/
+        cycle=2011-2012/
+            part-0001.parquet
+            part-0002.parquet
+        cycle=2013-2014/
+            part-0001.parquet
+            part-0002.parquet
+
+Practical recommendation:
+
+    Use partitioning by cycle and day if each partition is reasonably large.
+    Avoid thousands of tiny Parquet files.
+    Aim for Parquet files roughly 100 MB to 1 GB each when possible.
+
+
+4. Recommended columns for the 10-second dataset
+------------------------------------------------
+Keep the 10-second dataset as narrow as possible. Do not store unnecessary columns.
+
+Recommended columns:
+
+    SEQN              participant identifier
+    cycle             NHANES cycle, e.g., 2011-2012 or 2013-2014
+    day               study day or wear day index
+    epoch_index       10-second epoch index within the day, from 0 to 8639
+    sitting_prob      probability of sitting from the posture model
+    sitting_class     binary sitting indicator, if needed
+
+Optional columns:
+
+    sleep_prob        sleep/non-wear probability, if merged to 10-second level
+    sleep_class       binary sleep/non-wear indicator, if merged to 10-second level
+    valid_epoch       indicator for valid epoch, if needed
+
+Avoid storing:
+
+    - Full timestamp strings for every row
+    - Repeated demographic variables at the 10-second level
+    - Repeated survey weights at the 10-second level
+    - Long character labels
+    - Redundant columns that can be reconstructed later
+
+Instead of storing a full timestamp, store:
+
+    day + epoch_index
+
+Clock time can be reconstructed later:
+
+    seconds_since_midnight = epoch_index x 10
+    hour = floor(seconds_since_midnight / 3600)
+    minute = floor((seconds_since_midnight %% 3600) / 60)
+
+
+5. Recommended data types
+-------------------------
+Choosing efficient data types can reduce file size and memory use substantially.
+
+Suggested data types:
+
+    SEQN              int32 or int64
+    cycle             categorical/string partition column
+    day               int8 or int16
+    epoch_index       int16, since 0-8639 fits in int16
+    sitting_prob      float32
+    sitting_class     boolean or int8
+    sleep_prob        float32
+    sleep_class       boolean or int8
+    valid_epoch       boolean or int8
+
+Use float32 for model probabilities unless you need extremely high precision. This usually cuts probability storage in half compared with float64.
+
+Use integer or boolean variables for binary indicators.
+
+Avoid storing IDs and time variables as character strings.
+
+
+6. Approximate storage expectations
+-----------------------------------
+For approximately 879 million 10-second rows:
+
+    Plain CSV with several columns:        40-100+ GB
+    CSV.gz compressed:                    5-25 GB, but slow to read
+    Parquet with compression:             5-20 GB, depending on columns
+    In-memory pandas/R data frame:        50-150+ GB or more
+
+These are rough estimates. Actual size depends on the number of columns, data types, compression, and whether repeated values are stored efficiently.
+
+
+7. Recommended Python writing workflow
+--------------------------------------
+Use pandas/pyarrow or pyarrow directly.
+
+Example: write one DataFrame to Parquet
+
+    df.to_parquet(
+        "chap_10s_predictions.parquet",
+        engine="pyarrow",
+        compression="zstd",
+        index=False
+    )
+
+Example: write a partitioned Parquet dataset
+
+    df.to_parquet(
+        "chap_10s_predictions_parquet/",
+        engine="pyarrow",
+        compression="zstd",
+        partition_cols=["cycle", "day"],
+        index=False
+    )
+
+Before writing, reduce data types:
+
+    df["SEQN"] = df["SEQN"].astype("int32")
+    df["day"] = df["day"].astype("int8")
+    df["epoch_index"] = df["epoch_index"].astype("int16")
+    df["sitting_prob"] = df["sitting_prob"].astype("float32")
+    df["sitting_class"] = df["sitting_class"].astype("bool")
+
+If the full data are too large to hold in memory, write the data in chunks. For example, process one participant batch, one day, or one cycle at a time, and append/write separate Parquet part files.
+
+
+8. Recommended R writing workflow
+---------------------------------
+Use the arrow package.
+
+Example: write a single Parquet file
+
+    arrow::write_parquet(
+      df,
+      "chap_10s_predictions.parquet",
+      compression = "zstd"
+    )
+
+Example: write a partitioned dataset
+
+    arrow::write_dataset(
+      df,
+      path = "chap_10s_predictions_parquet",
+      format = "parquet",
+      partitioning = c("cycle", "day")
+    )
+
+Before writing, use compact types where possible:
+
+    df$SEQN <- as.integer(df$SEQN)
+    df$day <- as.integer(df$day)
+    df$epoch_index <- as.integer(df$epoch_index)
+    df$sitting_prob <- as.numeric(df$sitting_prob)
+    df$sitting_class <- as.logical(df$sitting_class)
+
+R stores numeric values as double by default, but Arrow can still write efficiently. If file size becomes a problem, consider writing from Python with float32 probabilities or using Arrow schema control.
+
+
+9. Efficient reading strategy
+-----------------------------
+Do not read the entire 10-second dataset unless absolutely necessary.
+
+Instead, read only:
+
+    - the columns needed for the task
+    - the cycle or day needed for the task
+    - the participant subset needed for the task
+
+Example in Python using pandas:
+
+    df = pandas.read_parquet(
+        "chap_10s_predictions_parquet/",
+        columns=["SEQN", "day", "epoch_index", "sitting_prob"]
+    )
+
+Example in Python using pyarrow dataset filtering:
+
+    import pyarrow.dataset as ds
+
+    dataset = ds.dataset("chap_10s_predictions_parquet", format="parquet")
+
+    table = dataset.to_table(
+        columns=["SEQN", "day", "epoch_index", "sitting_prob"],
+        filter=(ds.field("cycle") == "2011-2012") & (ds.field("day") == 1)
+    )
+
+    df = table.to_pandas()
+
+Example in R using arrow:
+
+    library(arrow)
+    library(dplyr)
+
+    ds <- open_dataset("chap_10s_predictions_parquet")
+
+    df_day1 <- ds %>%
+      filter(cycle == "2011-2012", day == 1) %>%
+      select(SEQN, day, epoch_index, sitting_prob) %>%
+      collect()
+
+The key idea is to push filters and column selection into Arrow before collecting into memory.
+
+
+10. Use DuckDB for large summaries
+----------------------------------
+DuckDB is very useful for summarizing large Parquet datasets without loading everything into memory.
+
+Example: compute hourly mean sitting probability from Parquet
+
+    library(DBI)
+    library(duckdb)
+
+    con <- dbConnect(duckdb::duckdb())
+
+    query <- "
+      SELECT
+        SEQN,
+        cycle,
+        day,
+        CAST(FLOOR(epoch_index / 360) AS INTEGER) AS hour,
+        AVG(sitting_prob) AS sitting_pct
+      FROM read_parquet('chap_10s_predictions_parquet/**/*.parquet')
+      GROUP BY SEQN, cycle, day, hour
+    "
+
+    hourly <- dbGetQuery(con, query)
+
+Why divide epoch_index by 360?
+
+    One hour contains 360 ten-second epochs:
+    60 minutes x 6 epochs/minute = 360 epochs/hour
+
+DuckDB can also write the result directly to Parquet:
+
+    COPY (
+      SELECT
+        SEQN,
+        cycle,
+        day,
+        CAST(FLOOR(epoch_index / 360) AS INTEGER) AS hour,
+        AVG(sitting_prob) AS sitting_pct
+      FROM read_parquet('chap_10s_predictions_parquet/**/*.parquet')
+      GROUP BY SEQN, cycle, day, hour
+    ) TO 'hourly_sitting_summary.parquet' (FORMAT PARQUET, COMPRESSION ZSTD);
+
+This is often better than pulling a huge table into R or Python first.
+
+
+11. Aggregating 10-second predictions to analysis epochs
+--------------------------------------------------------
+The full 10-second dataset should usually be treated as an intermediate file. Most analyses should use aggregated summaries.
+
+For 1-hour analysis epochs:
+
+    1 hour = 360 ten-second epochs
+
+For 30-minute analysis epochs:
+
+    30 minutes = 180 ten-second epochs
+
+If using 1-hour epochs, define:
+
+    hour = floor(epoch_index / 360)
+
+If using 30-minute epochs, define:
+
+    epoch_30m = floor(epoch_index / 180)
+
+Then summarize:
+
+    sitting_percentage = mean(sitting_prob) x 100
+
+or, if using binary classification:
+
+    sitting_percentage = mean(sitting_class) x 100
+
+For sleep/non-wear predictions at 30-second epochs:
+
+    1 hour = 120 thirty-second epochs
+    30 minutes = 60 thirty-second epochs
+
+The sitting and sleep summaries can then be merged by participant, day, and analysis epoch.
+
+
+12. Recommended analysis-level files
+------------------------------------
+After aggregation, create smaller files for the main analysis.
+
+Recommended files:
+
+    1. hourly_epoch_summary.parquet
+       One row per participant-day-hour.
+       Columns: SEQN, cycle, day, hour, sitting_pct, sleep_nonwear_pct
+
+    2. participant_day_summary.parquet
+       One row per participant-day.
+       Columns: SEQN, cycle, day, waking_sedentary_hours, waking_hours, sleep_nonwear_hours
+
+    3. participant_mean_summary.parquet
+       One row per participant.
+       Columns: SEQN, cycle, mean_waking_sedentary_hours, mean_waking_hours, mean_sleep_nonwear_hours
+
+    4. analysis_design_file.csv or .parquet
+       One row per participant with survey weights, strata, PSU, demographics, and participant-level sedentary summaries.
+
+The final survey analysis should be done at the participant level, not directly on the 10-second rows.
+
+
+13. Efficient participant-day sedentary calculation
+---------------------------------------------------
+After selecting the sleep/non-wear cutoff, classify each analysis epoch as waking or sleep/non-wear.
+
+For each participant-day:
+
+    1. Keep only waking analysis epochs.
+    2. Convert sitting percentage into time:
+
+           sedentary_hours_in_epoch = sitting_percentage / 100 x epoch_duration_hours
+
+    3. Sum across waking epochs:
+
+           daily_waking_sedentary_hours = sum(sedentary_hours_in_epoch)
+
+Example for 1-hour epochs:
+
+    If an epoch is 40% sitting:
+
+           0.40 x 1 hour = 0.40 hours = 24 minutes
+
+The participant-day sedentary total is the sum of these values across all waking epochs.
+
+
+14. Why not do survey analysis at the 10-second level?
+------------------------------------------------------
+Survey estimation should be performed at the participant level after averaging across valid days. The 10-second rows are repeated observations within the same participant and should not be treated as independent survey observations.
+
+Recommended survey workflow:
+
+    1. Aggregate 10-second predictions into analysis epochs.
+    2. Classify analysis epochs as waking or sleep/non-wear.
+    3. Calculate daily waking sedentary hours for each participant-day.
+    4. Average valid days within each participant.
+    5. Merge with NHANES survey weights, strata, PSU, and demographics.
+    6. Use the NHANES survey design to estimate national and subgroup means.
+
+
+15. Good file naming convention
+-------------------------------
+Use names that make the processing level clear.
+
+Examples:
+
+    raw_chap_10s_predictions_parquet/
+    raw_swan_30s_predictions_parquet/
+    epoch_1h_sitting_sleep_summary.parquet
+    participant_day_sedentary_sleep_summary.parquet
+    participant_mean_sedentary_sleep_summary.parquet
+    nhanes_survey_analysis_file.parquet
+    table_national_estimates.csv
+    table_subgroup_estimates.csv
+
+Avoid ambiguous names such as:
+
+    final.csv
+    data2.csv
+    output_new.csv
+
+
+16. Quality checks
+------------------
+After creating the Parquet files, check:
+
+    - Number of participants
+    - Number of days per participant
+    - Number of epochs per participant-day
+    - Missing sitting probabilities
+    - Missing sleep probabilities
+    - Range of sitting probabilities, expected 0 to 1
+    - Range of sleep probabilities, expected 0 to 1
+    - Number of 10-second epochs per full day, expected up to 8,640
+    - Number of 30-second epochs per full day, expected up to 2,880
+    - Number of hourly epochs per full day, expected up to 24
+
+Example checks:
+
+    Total possible 10-second epochs per full day: 8,640
+    Total possible 30-second epochs per full day: 2,880
+    Total possible 1-hour analysis epochs per full day: 24
+    Total possible 30-minute analysis epochs per full day: 48
+
+
+17. Practical cluster recommendations
+-------------------------------------
+On a cluster, avoid one huge job that tries to process all participants at once.
+
+Better options:
+
+    - Process one NHANES cycle at a time.
+    - Process one day at a time.
+    - Process batches of participants.
+    - Write intermediate outputs as Parquet.
+    - Use job arrays if available.
+    - Aggregate early to hourly or participant-day summaries.
+
+Recommended cluster workflow:
+
+    Step 1: Generate CHAP 10-second predictions by participant batch.
+    Step 2: Save each batch as Parquet.
+    Step 3: Generate SWaN sleep/non-wear predictions separately.
+    Step 4: Aggregate both predictions to the analysis epoch level.
+    Step 5: Merge sitting and sleep/non-wear summaries at the analysis epoch level.
+    Step 6: Calculate participant-day summaries.
+    Step 7: Create participant-level survey analysis file.
+
+This avoids repeatedly reading massive raw prediction files.
+
+
+18. Recommended manuscript wording
+----------------------------------
+A concise description for the Methods section could be:
+
+    Because the 10-second posture predictions would contain nearly 0.9 billion rows for a full 7-day record across 14,534 participants, predictions were stored and processed using compressed columnar files and summarized into analysis epochs before survey estimation. The primary analytic dataset was constructed at the participant-day and participant levels rather than at the 10-second epoch level.
+
+A more detailed version:
+
+    Ten-second posture predictions were treated as intermediate high-resolution outputs. To improve computational efficiency, these predictions were stored using compressed columnar files and aggregated to analysis epochs for each participant-day. Epoch-level sitting and sleep/non-wear summaries were then used to derive daily waking sedentary time, which was averaged across valid days within participants before applying the NHANES survey design.
+
+
+19. Bottom-line recommendation
+------------------------------
+For the full 10-second prediction dataset:
+
+    Save as partitioned Parquet with Zstandard compression.
+
+For efficient storage:
+
+    Use numeric IDs, integer day and epoch indices, float32 probabilities, and boolean/int8 indicators.
+
+For efficient computation:
+
+    Do not repeatedly read all 10-second rows.
+    Use Arrow or DuckDB to read only needed columns and partitions.
+    Aggregate early to hourly or participant-day summaries.
+
+For survey analysis:
+
+    Use the participant-level summary file with NHANES weights, strata, and PSU variables.
+
+
+20. Implemented independent 10-second export workflow
+------------------------------------------------------
+The repository implements the durable 10-second export as a separate reusable
+script:
+
+    scripts/export_10s_dataset.py
+
+The exporter reads completed CHAP and SWaN prediction CSVs. It does not run
+download, SWaN, CHAP, summary-epoch aggregation, or survey analysis.
+
+The exporter is also optionally called by run_participant_pipeline.py and
+batch_pipeline.py before their cleanup step. This allows the prediction CSVs
+to remain temporary while preserving the compact 10-second dataset.
+
+Output layout:
+
+    <output-root>/
+      model=CHAP/
+        Dataset=2011-2012/
+          ID=62191/
+            Day=2000-01-09/
+              part-0.parquet
+
+Each participant-day file contains:
+
+    epoch_index       int16; 10-second position within the calendar day
+    sitting           boolean CHAP sitting classification
+    sleep_state       int8 SWaN state: 0=WEAR, 1=SLEEP, 2=NON-WEAR, -1=missing
+    valid_sleep       boolean indicator that SWaN matched the CHAP epoch
+    waking            boolean indicator that sleep_state is WEAR
+    sleep_nonwear     boolean indicator that sleep_state is SLEEP or NON-WEAR
+
+SWaN probabilities are omitted by default. Include them only when needed with:
+
+    --export-10s-include-sleep-probabilities
+
+Run a standalone export when prediction CSVs already exist:
+
+    python scripts/export_10s_dataset.py \
+      --participant-id 83724 \
+      --dataset 2013-14 \
+      --model CHAP_ALL_ADULTS \
+      --output-root data/epoch_10s
+
+Run the batch pipeline and produce only durable 10-second files:
+
+    python scripts/batch_pipeline.py \
+      --batch-file batches/batch_1.txt \
+      --model CHAP \
+      --sleep-conda-env sklearn023 \
+      --posture-conda-env deepposture \
+      --posture-site wrist \
+      --export-10s \
+      --skip-summary \
+      --export-10s-output-root data/epoch_10s \
+      --download
+
+The dedicated Unity SLURM launcher is:
+
+    cluster/run_batch_unity_wrist_sleep_10s_array.sh

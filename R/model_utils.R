@@ -10,6 +10,8 @@
 data_load <- function() {
   
   candidates <- "data/project_data/final_data.csv.gz"
+  dd <- read_csv(candidates)
+  colnames(dd)
   candidates <- candidates[!is.na(candidates)]
   existing <- candidates[file.exists(candidates)]
   if (length(existing) == 0) {
@@ -29,7 +31,7 @@ data_load <- function() {
     message("[WARN] Nonsleep dataset not found at ", ns_path, "; proceeding without covariates.")
   }
   df <- dplyr::arrange(df, ID,Day, Hour)
-  df <- rename(df, percentSedentary=percent_sitting)
+  #df <- rename(df, percentSedentary=percent_sitting)
   df
 }
 
@@ -135,25 +137,29 @@ merge_nonsleep_covariates <- function(df,
   psu_col   <- get_col(ns, c("PSU","psu"))
   str_col   <- get_col(ns, c("Stratum","stratum","SDMVSTRA"))
   dql_col   <- get_col(ns, c("data_quality_level","data_quality","Data_quality_level"))
+  sed_col   <- get_col(ns, c("PercentSedentary","percent_sedentary"))
 
   # Create a reduced table for join
-  keep <- c(id_col, age_col, ht_col, wt_col, g_col, mar_col, ratio_col, iw_col, ew_col, psu_col, str_col, dql_col)
+  keep <- c(id_col,sed_col, age_col, ht_col, wt_col, g_col, mar_col, ratio_col, iw_col, ew_col, psu_col, str_col, dql_col)
   keep <- unique(keep[!is.na(keep)])
   ns_keep <- ns[, keep, drop = FALSE]
 
   # Rename for standardized output names
+  # Note: for dplyr::rename, the syntax is new_name = old_name
+  # So we build: rename_map["new_name"] <- "old_name"
   rename_map <- c()
-  if (!is.na(age_col)) rename_map[age_col] <- "Age"
-  if (!is.na(ht_col))  rename_map[ht_col]  <- "Height"
-  if (!is.na(wt_col))  rename_map[wt_col]  <- "Weight"
-  if (!is.na(g_col))   rename_map[g_col]   <- "Gender"
-  if (!is.na(mar_col)) rename_map[mar_col] <- "Marital_status"
-  if (!is.na(ratio_col)) rename_map[ratio_col] <- "RatioItop"
-  if (!is.na(iw_col))  rename_map[iw_col]  <- "Interview_weight"
-  if (!is.na(ew_col))  rename_map[ew_col]  <- "Exam_weight"
-  if (!is.na(psu_col)) rename_map[psu_col] <- "PSU"
-  if (!is.na(str_col)) rename_map[str_col] <- "Stratum"
-  if (!is.na(dql_col)) rename_map[dql_col] <- "data_quality_level"
+  if (!is.na(age_col)) rename_map["Age"] <- age_col
+  if (!is.na(ht_col))  rename_map["Height"] <- ht_col
+  if (!is.na(wt_col))  rename_map["Weight"] <- wt_col
+  if (!is.na(g_col))   rename_map["Gender"] <- g_col
+  if (!is.na(mar_col)) rename_map["Marital_status"] <- mar_col
+  if (!is.na(ratio_col)) rename_map["RatioItop"] <- ratio_col
+  if (!is.na(iw_col))  rename_map["Interview_weight"] <- iw_col
+  if (!is.na(ew_col))  rename_map["Exam_weight"] <- ew_col
+  if (!is.na(psu_col)) rename_map["PSU"] <- psu_col
+  if (!is.na(str_col)) rename_map["Stratum"] <- str_col
+  if (!is.na(dql_col)) rename_map["data_quality_level"] <- dql_col
+  if (!is.na(sed_col)) rename_map["percent_sedentary"] <- sed_col
   ns_keep <- dplyr::rename(ns_keep, dplyr::all_of(rename_map))
 
   # Collapse to one row per participant ID to prevent row multiplication on join
@@ -302,8 +308,7 @@ preprocess_sed_data <- function(
       dplyr::mutate(
         age_group = dplyr::case_when(
           .data$Age < 18 ~ "<18",
-          .data$Age >= 18 & .data$Age <= 34 ~ "18-34",
-          .data$Age >= 35 & .data$Age <= 44 ~ "35-44",
+          .data$Age >= 18 & .data$Age <= 44 ~ "18-44",
           .data$Age >= 45 & .data$Age <= 64 ~ "45-64",
           .data$Age >= 65 ~ "65+",
           TRUE ~ NA_character_
@@ -317,13 +322,13 @@ preprocess_sed_data <- function(
         )
       )
     # factorize
-    base_lvls <- c("18-34", "35-44", "45-64", "65+")
+    base_lvls <- c("18-44", "45-64", "65+")
     if (any(out$Age < 18, na.rm = TRUE)) base_lvls <- c("<18", base_lvls)
     out$age_group <- factor(out$age_group, levels = base_lvls, ordered = FALSE)
     out$bmi_cat   <- factor(out$bmi_cat, levels = c("Under/Normal (<25)", "Overweight (25-<30)", "Obesity (>=30)"), ordered = FALSE)
   } else {
     # create placeholder factors to keep downstream models happy
-    out$age_group <- factor(rep(NA_character_, nrow(out)), levels = c("<18","18-34","35-44","45-64","65+"))
+    out$age_group <- factor(rep(NA_character_, nrow(out)), levels = c("<18","18-44","45-64","65+"))
     out$bmi_cat   <- factor(rep(NA_character_, nrow(out)), levels = c("Under/Normal (<25)", "Overweight (25-<30)", "Obesity (>=30)"))
   }
   
@@ -429,7 +434,7 @@ fit_diag_by_hour <- function(df, weights, extra_fixed = NULL) {
   fixed_terms <- c("Hour", extra_fixed)
   fixed_terms <- unique(fixed_terms[!is.na(fixed_terms) & nzchar(fixed_terms)])
   fixed_rhs <- paste(fixed_terms, collapse = " + ")
-  form <- as.formula(paste0("percentSedentary ~ ", fixed_rhs, " + (0 + ", re_cols, " || ID)"))
+  form <- as.formula(paste0("percent_sedentary ~ ", fixed_rhs, " + (0 + ", re_cols, " || ID)"))
   ctl  <- lmerControl(optimizer = "bobyqa")
   lmer(form, data = md, REML = TRUE, control = ctl, weights = weights)
 }
