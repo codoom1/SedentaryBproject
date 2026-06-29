@@ -6,7 +6,8 @@ This repository contains a fully reproducible upstream data-generation pipeline 
 - Posture classification (DeepPostures/CHAP) in 10‑second windows
 - Participant-level summaries at a requested summary epoch, such as 1-hour, 1-minute, 30-second, or 10-second
 
-Background and purpose (from the abstract): Sedentary behavior is a major public health concern, but most surveillance collapses raw signals into daily summaries that obscure within‑day structure and are hard to reproduce. Our goal is to produce objective, nationally representative, time‑resolved estimates of sedentary behavior in the U.S., quantifying diurnal patterns and weekday–weekend differences via a reproducible pipeline.
+Our goal is to produce objective, nationally representative, time‑resolved estimates of sedentary behavior in the U.S., quantifying diurnal patterns and weekday–weekend differences via a reproducible pipeline. 
+You do not need to generate predictions from scratch if you want to use epoch level datasets. See [`wristsed`](https://github.com/codoom1/wristsed)for the R package epoch and participant level datasets. 
 
 Methods overview:
 
@@ -14,7 +15,9 @@ Methods overview:
 - Sleep/non‑wear: SWaN model on 30‑second windows (WEAR, SLEEP, NON‑WEAR)
 - Posture: CHAP model (DeepPostures) to label 10-second windows as sitting vs not-sitting
 - Summary stage: SWaN 30-second states are expanded to the 10-second CHAP grid, then both model outputs are summarized to the requested epoch
-- Sleep removal and analytic models are performed downstream of this repo's data products
+- Sleep removal and analytic models are performed downstream of this repo's data products. See [`SB-Estimation`](https://github.com/codoom1/SB-Estimation) for the primary analysis code for our paper. 
+
+The computational time and resources for this upstream work is enormous and we recommend using cloud computing with enough storage and allows batch processing. 
 
 ## Environments
 
@@ -32,6 +35,8 @@ conda env create -f environments/posture.yml
 # Optional: Posture (GPU) environment
 conda env create -f environments/posture-gpu.yml
 ```
+
+>Note: We add errors we encountered while running this pipeline and we provided how we resolved it. 
 
 Troubleshooting: if env creation fails during the pip stage with an error like "TypeError: sequence item 0: expected str instance, dict found", update your local copy of the YAMLs. We removed a malformed pip options block; the fixed files in this repo no longer use a pip section for posture envs (all packages come from conda channels).
 
@@ -408,18 +413,12 @@ python scripts/batch_pipeline.py \
 
 This creates columns such as `epoch_20m` and `epoch_30m`. These are grouping labels, not separate metric columns. Use `Hour` for hourly grouping. Use the finest `--summary-epoch` you need, then aggregate rows downstream using the coarser epoch columns.
 
-## Cluster batch (Unity GPU) 💻
+## Cluster batch (Cluster GPU Run) 💻
 
 We include SLURM scripts to run each `batches/batch_<N>.txt` as a job array on the Unity cluster GPU partition:
 
 - Wrist model with sleep included: `cluster/run_batch_unity_wrist_sleep_array.sh`
 - Wrist model with sleep, durable 10-second Parquet only: `cluster/run_batch_unity_wrist_sleep_10s_array.sh`
-- Incremental participant-day and participant summary refresh: `cluster/run_epoch_10s_summary_refresh.sh`
-- Legacy/general GPU launcher: `cluster/run_batch_unity_gpu_array.sh`
-- Requests GPU partition, 1 task, 4 cores, 40GB RAM, 10 days, long QoS
-- Wrist/sleep array: 25 tasks with concurrency 25 (`1-25%25`)
-- Default storage roots are `/work/pi_jstauden_umass_edu/SBpaper_data` and `/work/pi_jstauden_umass_edu/SBpaper_outputs`
-- Uses conda environments from this repo’s YAMLs
 
 Submit from repo root:
 
@@ -435,29 +434,6 @@ sbatch cluster/run_batch_unity_wrist_sleep_10s_array.sh
 
 The 10-second array writes persistent outputs under `$ARRAY_OUTPUT_ROOT/epoch_10s` by default. Raw data, processed data, and prediction CSVs remain temporary and are deleted after each successful participant export.
 
-While the 10-second production array is running, submit the summary refresh
-whenever you want to incorporate newly completed participant-days:
-
-```bash
-sbatch cluster/run_epoch_10s_summary_refresh.sh
-```
-
-The refresh job is idempotent. Existing unchanged days are skipped, updated
-participants are refreshed, and a lock prevents two refresh jobs from writing
-the same summaries simultaneously. Set `WRITE_CSV_SNAPSHOTS=1` only when a
-combined CSV snapshot is needed:
-
-```bash
-sbatch --export=ALL,WRITE_CSV_SNAPSHOTS=1 cluster/run_epoch_10s_summary_refresh.sh
-```
-
-After changing the summary metric definitions, rebuild existing day and
-participant summaries once:
-
-```bash
-sbatch --export=ALL,OVERWRITE_DAYS=1,REFRESH_ALL_PARTICIPANTS=1 \
-  cluster/run_epoch_10s_summary_refresh.sh
-```
 
 The wrist/sleep launcher includes SWaN sleep prediction and uses `--posture-site wrist`. Customize env names (`SLEEP_ENV`, `POSTURE_ENV`), model, wrist device, summary epoch, storage roots, or array range in the script. For a 30-second summary run, submit:
 
@@ -525,3 +501,7 @@ This upstream repository intentionally does not remove sleep/non-wear from sitti
 - conda env export -n sklearn023 > environments/environment-swan.yml
 - conda env export -n deepposture > environments/environment-posture.yml
 - Batch runs will, by default, clean up participant directories after summarization to save disk; pass `--no-cleanup` to keep all intermediates.
+
+## Upstream Implementations
+
+The official SWaN implementation used by this pipeline is the `SWaN_accel` package, available from PyPI at <https://pypi.org/project/SWaN-accel/> and from its source repository at <https://github.com/binodthapachhetry/SWaN>. The official CHAP/DeepPostures implementation is maintained by ADALabUCSD at <https://adalabucsd.github.io/DeepPostures/> with source code at <https://github.com/ADALabUCSD/DeepPostures>.
